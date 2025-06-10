@@ -157,6 +157,8 @@ pub struct SelfConfig {
     pub do_run: bool,
     /// Should we fail immediately if a benchmark target fails, or continue with the others?
     pub do_fail_fast: bool,
+    /// Should we compare the benchmarks only within their respective groups during the current run? Replaces the default behavior.
+    pub intra_group_comparison: bool,
     /// How should the CLI output be formatted
     pub output_format: OutputFormat,
     /// Should we print the output in color?
@@ -382,6 +384,14 @@ different language (eg. external C modules).
 Note however that it will tend to increase the measurement overhead, as the measurement loops 
 in the benchmark will not be optimized either. This may result in less-accurate measurements.
 ")
+        )
+        .arg(
+            Arg::with_name("intra-group-comparison")
+                .long("--intra-group-comparison")
+                .short("i")
+                .help(
+                    "Enables intra-group comparison mode: benchmarks are compared only within their respective groups during the current run, replacing the default behavior of comparing against previous baseline measurements.\n"
+            ),
         )
         .arg(
             Arg::with_name("output-format")
@@ -648,6 +658,7 @@ Compilation can be customized with the `bench` profile in the manifest.
     };
 
     let self_config = SelfConfig {
+        intra_group_comparison: matches.is_present("intra-group-comparison"),
         output_format: (matches.value_of("output-format"))
             .or(toml_config.output_format.as_deref())
             .map(OutputFormat::from_str)

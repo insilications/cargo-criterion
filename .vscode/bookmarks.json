@@ -1,0 +1,64 @@
+{
+	"files": [
+		{
+			"path": "src/bench_target.rs",
+			"bookmarks": [
+				{
+					"line": 281,
+					"column": 66,
+					"label": ""
+				}
+			]
+		},
+		{
+			"path": "src/report.rs",
+			"bookmarks": [
+				{
+					"line": 617,
+					"column": 17,
+					"label": ""
+				},
+				{
+					"line": 626,
+					"column": 10,
+					"label": ""
+				}
+			]
+		},
+		{
+			"path": "src/estimate.rs",
+			"bookmarks": [
+				{
+					"line": 112,
+					"column": 40,
+					"label": ""
+				}
+			]
+		},
+		{
+			"path": "src/analysis.rs",
+			"bookmarks": [
+				{
+					"line": 46,
+					"column": 52,
+					"label": ""
+				},
+				{
+					"line": 139,
+					"column": 49,
+					"label": ""
+				}
+			]
+		},
+		{
+			"path": "src/model.rs",
+			"bookmarks": [
+				{
+					"line": 174,
+					"column": 43,
+					"label": ""
+				}
+			]
+		}
+	]
+}

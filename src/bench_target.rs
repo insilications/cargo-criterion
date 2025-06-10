@@ -155,11 +155,26 @@ impl BenchTarget {
                     }
                     IncomingMessage::FinishedBenchmarkGroup { group } => {
                         let benchmark_group = model.add_benchmark_group(&self.name, &group);
+
+                        eprintln!(
+                            "FinishedBenchmarkGroup - name: {} - group: {}",
+                            self.name, group
+                        );
                         {
                             let formatter = crate::value_formatter::ValueFormatter::new(&mut conn);
                             report.summarize(&context, &group, benchmark_group, &formatter);
                             if any_from_group_executed {
                                 report.group_separator();
+                            }
+
+                            for (x, y) in &model.groups {
+                                eprintln!("\nBeginningBenchmark - group: {x} ");
+                                for (bx, by) in &y.benchmarks {
+                                    eprintln!(
+                                        "benchmark: {bx:?} - target: {:?}",
+                                        by.target.as_ref()
+                                    );
+                                }
                             }
                         }
                     }

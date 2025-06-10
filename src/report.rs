@@ -293,6 +293,76 @@ pub trait Report {
     }
 }
 
+pub enum CliReports {
+    Cli(CliReport),
+    CliIntraGroup(CliReportIntraGroup),
+}
+
+impl Report for CliReports {
+    fn benchmark_start(&self, id: &BenchmarkId, context: &ReportContext) {
+        match self {
+            CliReports::Cli(report) => report.benchmark_start(id, context),
+            CliReports::CliIntraGroup(report) => report.benchmark_start(id, context),
+        }
+    }
+
+    fn warmup(&self, id: &BenchmarkId, context: &ReportContext, warmup_ns: f64) {
+        match self {
+            CliReports::Cli(report) => report.warmup(id, context, warmup_ns),
+            CliReports::CliIntraGroup(report) => report.warmup(id, context, warmup_ns),
+        }
+    }
+
+    fn analysis(&self, id: &BenchmarkId, context: &ReportContext) {
+        match self {
+            CliReports::Cli(report) => report.analysis(id, context),
+            CliReports::CliIntraGroup(report) => report.analysis(id, context),
+        }
+    }
+
+    fn measurement_start(
+        &self,
+        id: &BenchmarkId,
+        context: &ReportContext,
+        sample_count: u64,
+        estimate_ns: f64,
+        iter_count: u64,
+    ) {
+        match self {
+            CliReports::Cli(report) => {
+                report.measurement_start(id, context, sample_count, estimate_ns, iter_count);
+            }
+            CliReports::CliIntraGroup(report) => {
+                report.measurement_start(id, context, sample_count, estimate_ns, iter_count);
+            }
+        }
+    }
+
+    fn measurement_complete(
+        &self,
+        id: &BenchmarkId,
+        context: &ReportContext,
+        measurements: &MeasurementData<'_>,
+        formatter: &ValueFormatter,
+    ) {
+        match self {
+            CliReports::Cli(report) => {
+                report.measurement_complete(id, context, measurements, formatter);
+            }
+            CliReports::CliIntraGroup(report) => {
+                report.measurement_complete(id, context, measurements, formatter);
+            }
+        }
+    }
+
+    fn group_separator(&self) {
+        match self {
+            CliReports::Cli(report) => report.group_separator(),
+            CliReports::CliIntraGroup(report) => report.group_separator(),
+        }
+    }
+}
+
 pub struct Reports<'a> {
     reports: Vec<&'a dyn Report>,
 }
@@ -687,6 +757,359 @@ impl Report for CliReport {
                 eprintln!("{}{}", " ".repeat(24), explanation_str);
             }
         }
+
+        if self.verbose {
+            self.outliers(&meas.avg_times);
+
+            let format_short_estimate = |estimate: &Estimate| -> String {
+                format!(
+                    "[{} {}]",
+                    formatter.format_value(estimate.confidence_interval.lower_bound),
+                    formatter.format_value(estimate.confidence_interval.upper_bound)
+                )
+            };
+
+            let data = &meas.data;
+            if let Some(slope_estimate) = meas.absolute_estimates.slope.as_ref() {
+                eprintln!(
+                    "{:<7}{} {:<15}[{:0.7} {:0.7}]",
+                    "slope",
+                    format_short_estimate(slope_estimate),
+                    "R^2",
+                    Slope(slope_estimate.confidence_interval.lower_bound).r_squared(data),
+                    Slope(slope_estimate.confidence_interval.upper_bound).r_squared(data),
+                );
+            }
+            eprintln!(
+                "{:<7}{} {:<15}{}",
+                "mean",
+                format_short_estimate(&meas.absolute_estimates.mean),
+                "std. dev.",
+                format_short_estimate(&meas.absolute_estimates.std_dev),
+            );
+            eprintln!(
+                "{:<7}{} {:<15}{}",
+                "median",
+                format_short_estimate(&meas.absolute_estimates.median),
+                "med. abs. dev.",
+                format_short_estimate(&meas.absolute_estimates.median_abs_dev),
+            );
+        }
+    }
+
+    fn group_separator(&self) {
+        eprintln!();
+    }
+}
+
+pub struct CliReportIntraGroup {
+    pub enable_text_overwrite: bool,
+    pub enable_text_coloring: bool,
+    pub verbose: bool,
+    pub show_differences: bool,
+
+    last_line_len: Cell<usize>,
+}
+
+impl CliReportIntraGroup {
+    pub fn new(
+        enable_text_overwrite: bool,
+        enable_text_coloring: bool,
+        show_differences: bool,
+        verbose: bool,
+    ) -> CliReportIntraGroup {
+        CliReportIntraGroup {
+            enable_text_overwrite,
+            enable_text_coloring,
+            show_differences,
+            verbose,
+
+            last_line_len: Cell::new(0),
+        }
+    }
+
+    fn text_overwrite(&self) {
+        if self.enable_text_overwrite {
+            eprint!("\r");
+            for _ in 0..self.last_line_len.get() {
+                eprint!(" ");
+            }
+            eprint!("\r");
+        }
+    }
+
+    //Passing a String is the common case here.
+    #[allow(clippy::needless_pass_by_value)]
+    fn print_overwritable(&self, s: String) {
+        if self.enable_text_overwrite {
+            self.last_line_len.set(s.len());
+            eprint!("{}", s);
+            stderr().flush().unwrap();
+        } else {
+            eprintln!("{}", s);
+        }
+    }
+
+    fn green(&self, s: String) -> String {
+        if self.enable_text_coloring {
+            format!("\x1B[32m{}\x1B[39m", s)
+        } else {
+            s
+        }
+    }
+
+    fn yellow(&self, s: String) -> String {
+        if self.enable_text_coloring {
+            format!("\x1B[33m{}\x1B[39m", s)
+        } else {
+            s
+        }
+    }
+
+    fn red(&self, s: String) -> String {
+        if self.enable_text_coloring {
+            format!("\x1B[31m{}\x1B[39m", s)
+        } else {
+            s
+        }
+    }
+
+    fn bold(&self, s: String) -> String {
+        if self.enable_text_coloring {
+            format!("\x1B[1m{}\x1B[22m", s)
+        } else {
+            s
+        }
+    }
+
+    fn faint(&self, s: String) -> String {
+        if self.enable_text_coloring {
+            format!("\x1B[2m{}\x1B[22m", s)
+        } else {
+            s
+        }
+    }
+
+    pub fn outliers(&self, sample: &LabeledSample<'_, f64>) {
+        let (los, lom, _, him, his) = sample.count();
+        let noutliers = los + lom + him + his;
+        let sample_size = sample.len();
+
+        if noutliers == 0 {
+            return;
+        }
+
+        let percent = |n: usize| 100. * n as f64 / sample_size as f64;
+
+        eprintln!(
+            "{}",
+            self.yellow(format!(
+                "Found {} outliers among {} measurements ({:.2}%)",
+                noutliers,
+                sample_size,
+                percent(noutliers)
+            ))
+        );
+
+        let print = |n, label| {
+            if n != 0 {
+                eprintln!("  {} ({:.2}%) {}", n, percent(n), label);
+            }
+        };
+
+        print(los, "low severe");
+        print(lom, "low mild");
+        print(him, "high mild");
+        print(his, "high severe");
+    }
+}
+impl Report for CliReportIntraGroup {
+    fn benchmark_start(&self, id: &BenchmarkId, _: &ReportContext) {
+        self.print_overwritable(format!("Benchmarking {}", id));
+    }
+
+    fn warmup(&self, id: &BenchmarkId, _: &ReportContext, warmup_ns: f64) {
+        self.text_overwrite();
+        self.print_overwritable(format!(
+            "Benchmarking {}: Warming up for {}",
+            id,
+            format::time(warmup_ns)
+        ));
+    }
+
+    fn analysis(&self, id: &BenchmarkId, _: &ReportContext) {
+        self.text_overwrite();
+        self.print_overwritable(format!("Benchmarking {}: Analyzing", id));
+    }
+
+    fn measurement_start(
+        &self,
+        id: &BenchmarkId,
+        _: &ReportContext,
+        sample_count: u64,
+        estimate_ns: f64,
+        iter_count: u64,
+    ) {
+        self.text_overwrite();
+        let iter_string = if self.verbose {
+            format!("{} iterations", iter_count)
+        } else {
+            format::iter_count(iter_count)
+        };
+
+        self.print_overwritable(format!(
+            "Benchmarking {}: Collecting {} samples in estimated {} ({})",
+            id,
+            sample_count,
+            format::time(estimate_ns),
+            iter_string
+        ));
+    }
+
+    fn measurement_complete(
+        &self,
+        id: &BenchmarkId,
+        _: &ReportContext,
+        meas: &MeasurementData<'_>,
+        formatter: &ValueFormatter,
+    ) {
+        self.text_overwrite();
+
+        let typical_estimate = meas.absolute_estimates.typical();
+
+        {
+            let mut id = id.as_title().to_owned();
+
+            if id.len() > 23 {
+                eprintln!("{}", self.green(id.clone()));
+                id.clear();
+            }
+            let id_len = id.len();
+
+            eprintln!("Intra-Group Comparison");
+
+            eprintln!(
+                "{}{}time:   [{} {} {}]",
+                self.green(id),
+                " ".repeat(24 - id_len),
+                self.faint(
+                    formatter.format_value(typical_estimate.confidence_interval.lower_bound)
+                ),
+                self.bold(formatter.format_value(typical_estimate.point_estimate)),
+                self.faint(
+                    formatter.format_value(typical_estimate.confidence_interval.upper_bound)
+                )
+            );
+        }
+
+        if let Some(ref throughput) = meas.throughput {
+            eprintln!(
+                "{}thrpt:  [{} {} {}]",
+                " ".repeat(24),
+                self.faint(formatter.format_throughput(
+                    throughput,
+                    typical_estimate.confidence_interval.upper_bound
+                )),
+                self.bold(formatter.format_throughput(throughput, typical_estimate.point_estimate)),
+                self.faint(formatter.format_throughput(
+                    throughput,
+                    typical_estimate.confidence_interval.lower_bound
+                )),
+            )
+        }
+
+        // if self.show_differences {
+        //     if let Some(ref comp) = meas.comparison {
+        //         let different_mean = comp.p_value < comp.significance_threshold;
+        //         let mean_est = &comp.relative_estimates.mean;
+        //         let point_estimate = mean_est.point_estimate;
+        //         let mut point_estimate_str = format::change(point_estimate, true);
+        //         // The change in throughput is related to the change in timing. Reducing the timing by
+        //         // 50% increases the througput by 100%.
+        //         let to_thrpt_estimate = |ratio: f64| 1.0 / (1.0 + ratio) - 1.0;
+        //         let mut thrpt_point_estimate_str =
+        //             format::change(to_thrpt_estimate(point_estimate), true);
+        //         let explanation_str: String;
+
+        //         if !different_mean {
+        //             explanation_str = "No change in performance detected.".to_owned();
+        //         } else {
+        //             let comparison = compare_to_threshold(mean_est, comp.noise_threshold);
+        //             match comparison {
+        //                 ComparisonResult::Improved => {
+        //                     point_estimate_str = self.green(self.bold(point_estimate_str));
+        //                     thrpt_point_estimate_str =
+        //                         self.green(self.bold(thrpt_point_estimate_str));
+        //                     explanation_str =
+        //                         format!("Performance has {}.", self.green("improved".to_owned()));
+        //                 }
+        //                 ComparisonResult::Regressed => {
+        //                     point_estimate_str = self.red(self.bold(point_estimate_str));
+        //                     thrpt_point_estimate_str =
+        //                         self.red(self.bold(thrpt_point_estimate_str));
+        //                     explanation_str =
+        //                         format!("Performance has {}.", self.red("regressed".to_owned()));
+        //                 }
+        //                 ComparisonResult::NonSignificant => {
+        //                     explanation_str = "Change within noise threshold.".to_owned();
+        //                 }
+        //             }
+        //         }
+
+        //         if meas.throughput.is_some() {
+        //             eprintln!("{}change:", " ".repeat(17));
+
+        //             eprintln!(
+        //                 "{}time:   [{} {} {}] (p = {:.2} {} {:.2})",
+        //                 " ".repeat(24),
+        //                 self.faint(format::change(
+        //                     mean_est.confidence_interval.lower_bound,
+        //                     true
+        //                 )),
+        //                 point_estimate_str,
+        //                 self.faint(format::change(
+        //                     mean_est.confidence_interval.upper_bound,
+        //                     true
+        //                 )),
+        //                 comp.p_value,
+        //                 if different_mean { "<" } else { ">" },
+        //                 comp.significance_threshold
+        //             );
+        //             eprintln!(
+        //                 "{}thrpt:  [{} {} {}]",
+        //                 " ".repeat(24),
+        //                 self.faint(format::change(
+        //                     to_thrpt_estimate(mean_est.confidence_interval.upper_bound),
+        //                     true
+        //                 )),
+        //                 thrpt_point_estimate_str,
+        //                 self.faint(format::change(
+        //                     to_thrpt_estimate(mean_est.confidence_interval.lower_bound),
+        //                     true
+        //                 )),
+        //             );
+        //         } else {
+        //             eprintln!(
+        //                 "{}change: [{} {} {}] (p = {:.2} {} {:.2})",
+        //                 " ".repeat(24),
+        //                 self.faint(format::change(
+        //                     mean_est.confidence_interval.lower_bound,
+        //                     true
+        //                 )),
+        //                 point_estimate_str,
+        //                 self.faint(format::change(
+        //                     mean_est.confidence_interval.upper_bound,
+        //                     true
+        //                 )),
+        //                 comp.p_value,
+        //                 if different_mean { "<" } else { ">" },
+        //                 comp.significance_threshold
+        //             );
+        //         }
+
+        //         eprintln!("{}{}", " ".repeat(24), explanation_str);
+        //     }
+        // }
 
         if self.verbose {
             self.outliers(&meas.avg_times);

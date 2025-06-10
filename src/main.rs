@@ -101,10 +101,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let machine_report = message_formats::create_machine_report(self_config);
 
     let mut reports: Vec<&dyn crate::report::Report> = Vec::new();
+    // let mut reports: Vec<crate::report::ReportEnum> = Vec::new();
     match self_config.output_format {
         OutputFormat::Bencher => reports.push(&bencher_report),
         OutputFormat::Criterion | OutputFormat::Quiet | OutputFormat::Verbose => {
-            reports.push(&cli_report)
+            reports.push(&cli_report);
         }
     }
     if let Some(html_report) = &html_report {
@@ -154,7 +155,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Configure and return a Report object that prints benchmark information to the command-line.
-fn configure_cli_output(self_config: &crate::config::SelfConfig) -> crate::report::CliReport {
+fn configure_cli_output(self_config: &crate::config::SelfConfig) -> crate::report::CliReports {
     let stderr_isatty = atty::is(atty::Stream::Stderr);
     let mut enable_text_overwrite = stderr_isatty && !debug_enabled();
     let enable_text_coloring = match self_config.text_color {
@@ -175,12 +176,21 @@ fn configure_cli_output(self_config: &crate::config::SelfConfig) -> crate::repor
         OutputFormat::Criterion | OutputFormat::Quiet | OutputFormat::Bencher => debug_enabled(),
     };
 
-    crate::report::CliReport::new(
-        enable_text_overwrite,
-        enable_text_coloring,
-        show_differences,
-        verbose,
-    )
+    if self_config.intra_group_comparison {
+        crate::report::CliReports::CliIntraGroup(crate::report::CliReportIntraGroup::new(
+            enable_text_overwrite,
+            enable_text_coloring,
+            show_differences,
+            verbose,
+        ))
+    } else {
+        crate::report::CliReports::Cli(crate::report::CliReport::new(
+            enable_text_overwrite,
+            enable_text_coloring,
+            show_differences,
+            verbose,
+        ))
+    }
 }
 
 /// Configure and return a Gnuplot plotting backend, if available.

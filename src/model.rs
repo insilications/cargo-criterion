@@ -159,6 +159,19 @@ impl Model {
             .format("measurement_%y%m%d%H%M%S.cbor")
             .to_string();
 
+        let (relative_estimates, hypothesis) =
+            if let Some(comparison) = &analysis_results.comparison {
+                (
+                    Some(comparison.relative_estimates.clone()),
+                    Some(Hypothesis {
+                        p_value: comparison.p_value,
+                        significance_threshold: comparison.significance_threshold,
+                    }),
+                )
+            } else {
+                (None, None)
+            };
+
         let saved_stats = SavedStatistics {
             datetime: chrono::Utc::now(),
             iterations: analysis_results.iter_counts().to_vec(),
@@ -166,10 +179,8 @@ impl Model {
             avg_values: analysis_results.avg_times.to_vec(),
             estimates: analysis_results.absolute_estimates.clone(),
             throughput: analysis_results.throughput.clone(),
-            changes: analysis_results
-                .comparison
-                .as_ref()
-                .map(|c| c.relative_estimates.clone()),
+            changes: relative_estimates,
+            hypothesis,
             change_direction: analysis_results
                 .comparison
                 .as_ref()
@@ -346,6 +357,12 @@ fn get_change_direction(comp: &ComparisonData) -> ChangeDirection {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Hypothesis {
+    pub p_value: f64,
+    pub significance_threshold: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SavedStatistics {
     // The timestamp of when these measurements were saved.
     pub datetime: DateTime<Utc>,
@@ -362,9 +379,10 @@ pub struct SavedStatistics {
     // The statistical differences compared to the last run. We save these so we don't have to
     // recompute them later for the history report.
     pub changes: Option<ChangeEstimates>,
+    // Hypothesis information, if any
+    pub hypothesis: Option<Hypothesis>,
     // Was the change (if any) significant?
     pub change_direction: Option<ChangeDirection>,
-
     // An optional user-provided identifier string. This might be a version control commit ID or
     // something custom
     pub history_id: Option<String>,
