@@ -125,6 +125,7 @@ impl Estimates {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Distributions {
     pub mean: Distribution<f64>,
     pub median: Distribution<f64>,
@@ -168,6 +169,7 @@ impl ChangeEstimates {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct ChangeDistributions {
     pub mean: Distribution<f64>,
     pub median: Distribution<f64>,

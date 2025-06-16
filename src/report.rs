@@ -51,6 +51,41 @@ impl MeasurementData<'_> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct OwnedMeasurementData {
+    pub iter_counts: Vec<f64>,
+    pub sample_times: Vec<f64>,
+    pub avg_times: Vec<f64>,
+    pub absolute_estimates: Estimates,
+    pub distributions: Distributions,
+    // pub comparison: Option<ComparisonData>,
+    pub throughput: Option<Throughput>,
+}
+
+impl From<&MeasurementData<'_>> for OwnedMeasurementData {
+    fn from(meas: &MeasurementData<'_>) -> Self {
+        OwnedMeasurementData {
+            iter_counts: meas.iter_counts().to_vec(),
+            sample_times: meas.sample_times().to_vec(),
+            avg_times: meas.avg_times.to_vec(),
+            absolute_estimates: meas.absolute_estimates.clone(),
+            distributions: meas.distributions.clone(),
+            // comparison: meas.comparison.clone(),
+            throughput: meas.throughput.clone(),
+        }
+    }
+}
+
+impl OwnedMeasurementData {
+    pub fn iter_counts(&self) -> &Sample<f64> {
+        Sample::new(&self.iter_counts)
+    }
+
+    pub fn sample_times(&self) -> &Sample<f64> {
+        Sample::new(&self.sample_times)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ValueType {
     Bytes,
@@ -291,6 +326,19 @@ pub trait Report {
         _formatter: &ValueFormatter,
     ) {
     }
+
+    fn intra_group_comparison(&self) -> bool {
+        false
+    }
+
+    fn show_intra_group_comparison(
+        &self,
+        id: &BenchmarkId,
+        report_context: &ReportContext,
+        meas: &ComparisonData,
+        formatter: &ValueFormatter,
+    ) {
+    }
 }
 
 pub enum CliReports {
@@ -359,6 +407,28 @@ impl Report for CliReports {
         match self {
             CliReports::Cli(report) => report.group_separator(),
             CliReports::CliIntraGroup(report) => report.group_separator(),
+        }
+    }
+
+    fn intra_group_comparison(&self) -> bool {
+        match self {
+            CliReports::Cli(report) => false,
+            CliReports::CliIntraGroup(report) => true,
+        }
+    }
+
+    fn show_intra_group_comparison(
+        &self,
+        id: &BenchmarkId,
+        report_context: &ReportContext,
+        meas: &ComparisonData,
+        formatter: &ValueFormatter,
+    ) {
+        match self {
+            CliReports::Cli(_) => {}
+            CliReports::CliIntraGroup(report) => {
+                report.show_intra_group_comparison(id, report_context, meas, formatter);
+            }
         }
     }
 }
@@ -448,6 +518,18 @@ impl Report for Reports<'_> {
     ) {
         for report in &self.reports {
             report.history(context, id, history, formatter);
+        }
+    }
+
+    fn show_intra_group_comparison(
+        &self,
+        id: &BenchmarkId,
+        report_context: &ReportContext,
+        meas: &ComparisonData,
+        formatter: &ValueFormatter,
+    ) {
+        for report in &self.reports {
+            report.show_intra_group_comparison(id, report_context, meas, formatter);
         }
     }
 }
@@ -1152,6 +1234,145 @@ impl Report for CliReportIntraGroup {
 
     fn group_separator(&self) {
         eprintln!();
+    }
+
+    fn show_intra_group_comparison(
+        &self,
+        id: &BenchmarkId,
+        report_context: &ReportContext,
+        meas: &ComparisonData,
+        formatter: &ValueFormatter,
+    ) {
+        self.text_overwrite();
+
+        // let typical_estimate = meas.absolute_estimates.typical();
+
+        // {
+        //     let mut id = id.as_title().to_owned();
+
+        //     if id.len() > 23 {
+        //         eprintln!("{}", self.green(id.clone()));
+        //         id.clear();
+        //     }
+        //     let id_len = id.len();
+
+        //     eprintln!(
+        //         "{}{}time:   [{} {} {}]",
+        //         self.green(id),
+        //         " ".repeat(24 - id_len),
+        //         self.faint(
+        //             formatter.format_value(typical_estimate.confidence_interval.lower_bound)
+        //         ),
+        //         self.bold(formatter.format_value(typical_estimate.point_estimate)),
+        //         self.faint(
+        //             formatter.format_value(typical_estimate.confidence_interval.upper_bound)
+        //         )
+        //     );
+        // }
+
+        // if let Some(ref throughput) = meas.throughput {
+        //     eprintln!(
+        //         "{}thrpt:  [{} {} {}]",
+        //         " ".repeat(24),
+        //         self.faint(formatter.format_throughput(
+        //             throughput,
+        //             typical_estimate.confidence_interval.upper_bound
+        //         )),
+        //         self.bold(formatter.format_throughput(throughput, typical_estimate.point_estimate)),
+        //         self.faint(formatter.format_throughput(
+        //             throughput,
+        //             typical_estimate.confidence_interval.lower_bound
+        //         )),
+        //     )
+        // }
+
+        // if self.show_differences {
+        let different_mean = meas.p_value < meas.significance_threshold;
+        let mean_est = &meas.relative_estimates.mean;
+        let point_estimate = mean_est.point_estimate;
+        let mut point_estimate_str = format::change(point_estimate, true);
+        // The change in throughput is related to the change in timing. Reducing the timing by
+        // 50% increases the througput by 100%.
+        let to_thrpt_estimate = |ratio: f64| 1.0 / (1.0 + ratio) - 1.0;
+        let mut thrpt_point_estimate_str = format::change(to_thrpt_estimate(point_estimate), true);
+        let explanation_str: String;
+
+        if !different_mean {
+            explanation_str = "No change in performance detected.".to_owned();
+        } else {
+            let comparison = compare_to_threshold(mean_est, meas.noise_threshold);
+            match comparison {
+                ComparisonResult::Improved => {
+                    point_estimate_str = self.green(self.bold(point_estimate_str));
+                    thrpt_point_estimate_str = self.green(self.bold(thrpt_point_estimate_str));
+                    explanation_str =
+                        format!("Performance has {}.", self.green("improved".to_owned()));
+                }
+                ComparisonResult::Regressed => {
+                    point_estimate_str = self.red(self.bold(point_estimate_str));
+                    thrpt_point_estimate_str = self.red(self.bold(thrpt_point_estimate_str));
+                    explanation_str =
+                        format!("Performance has {}.", self.red("regressed".to_owned()));
+                }
+                ComparisonResult::NonSignificant => {
+                    explanation_str = "Change within noise threshold.".to_owned();
+                }
+            }
+        }
+
+        // if meas.throughput.is_some() {
+        //     eprintln!("{}change:", " ".repeat(17));
+
+        //     eprintln!(
+        //         "{}time:   [{} {} {}] (p = {:.2} {} {:.2})",
+        //         " ".repeat(24),
+        //         self.faint(format::change(
+        //             mean_est.confidence_interval.lower_bound,
+        //             true
+        //         )),
+        //         point_estimate_str,
+        //         self.faint(format::change(
+        //             mean_est.confidence_interval.upper_bound,
+        //             true
+        //         )),
+        //         comp.p_value,
+        //         if different_mean { "<" } else { ">" },
+        //         comp.significance_threshold
+        //     );
+        //     eprintln!(
+        //         "{}thrpt:  [{} {} {}]",
+        //         " ".repeat(24),
+        //         self.faint(format::change(
+        //             to_thrpt_estimate(mean_est.confidence_interval.upper_bound),
+        //             true
+        //         )),
+        //         thrpt_point_estimate_str,
+        //         self.faint(format::change(
+        //             to_thrpt_estimate(mean_est.confidence_interval.lower_bound),
+        //             true
+        //         )),
+        //     );
+        // } else {
+        eprintln!(
+            "{}change: [{} {} {}] (p = {:.2} {} {:.2})",
+            " ".repeat(24),
+            self.faint(format::change(
+                mean_est.confidence_interval.lower_bound,
+                true
+            )),
+            point_estimate_str,
+            self.faint(format::change(
+                mean_est.confidence_interval.upper_bound,
+                true
+            )),
+            meas.p_value,
+            if different_mean { "<" } else { ">" },
+            meas.significance_threshold
+        );
+        // }
+
+        eprintln!("{}{}", " ".repeat(24), explanation_str);
+        // }
     }
 }
 

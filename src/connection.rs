@@ -249,7 +249,7 @@ pub enum Throughput {
     Elements(u64),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub enum SamplingMethod {
     Linear,
     Flat,
@@ -260,12 +260,12 @@ impl SamplingMethod {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct Duration {
     secs: u64,
     nanos: u32,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct BenchmarkConfig {
     confidence_level: f64,
     measurement_time: Duration,

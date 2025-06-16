@@ -4,7 +4,7 @@ use crate::estimate::{
     ChangeDistributions, ChangeEstimates, ChangePointEstimates, Distributions, Estimates,
     PointEstimates,
 };
-use crate::report::MeasurementData;
+use crate::report::{ComparisonData, MeasurementData};
 use crate::stats::bivariate::regression::Slope;
 use crate::stats::bivariate::Data;
 use crate::stats::univariate::outliers::tukey;
@@ -35,7 +35,8 @@ pub(crate) fn analysis<'a>(
     throughput: Option<Throughput>,
     new_sample: MeasuredValues<'a>,
     old_sample: Option<(MeasuredValues<'a>, &'a Estimates)>,
-    sampling_method: SamplingMethod,
+    sampling_method: &SamplingMethod,
+    intra_group_comparison: bool,
 ) -> MeasurementData<'a> {
     let iters = new_sample.iteration_count;
     let values = new_sample.sample_values;
@@ -52,11 +53,73 @@ pub(crate) fn analysis<'a>(
         distributions.slope = Some(distribution);
     }
 
-    let compare_data = if let Some((old_sample, old_estimates)) = old_sample {
+    let compare_data = if intra_group_comparison {
+        if let Some((old_sample, old_estimates)) = old_sample {
+            let (
+                t_value,
+                t_distribution,
+                relative_estimates,
+                relative_distributions,
+                base_avg_times,
+            ) = compare(avg_values, &old_sample, config);
+            let p_value = t_distribution.p_value(t_value, &Tails::Two);
+            Some(crate::report::ComparisonData {
+                p_value,
+                t_distribution,
+                t_value,
+                relative_estimates,
+                relative_distributions,
+                significance_threshold: config.significance_level,
+                noise_threshold: config.noise_threshold,
+                base_iter_counts: old_sample.iteration_count.to_vec(),
+                base_sample_times: old_sample.sample_values.to_vec(),
+                base_avg_times,
+                base_estimates: old_estimates.clone(),
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    MeasurementData {
+        data: Data::new(iters, values),
+        avg_times: labeled_sample,
+        absolute_estimates: estimates,
+        distributions,
+        comparison: compare_data,
+        throughput,
+    }
+}
+
+pub(crate) fn analysis_comparison<'a>(
+    config: &BenchmarkConfig,
+    // throughput: Option<Throughput>,
+    new_sample: MeasuredValues<'a>,
+    old_sample: Option<(MeasuredValues<'a>, &'a Estimates)>,
+    // sampling_method: SamplingMethod,
+) -> Option<ComparisonData> {
+    // let iters = new_sample.iteration_count;
+    // let values = new_sample.sample_values;
+
+    let avg_values = Sample::new(new_sample.avg_values);
+
+    // let data = Data::new(iters, values);
+    // let labeled_sample = tukey::classify(avg_values);
+    // let (mut distributions, mut estimates) = estimates(avg_values, config);
+
+    // if sampling_method.is_linear() {
+    //     let (distribution, slope) = regression(&data, config);
+    //     estimates.slope = Some(slope);
+    //     distributions.slope = Some(distribution);
+    // }
+
+    if let Some((old_sample, old_estimates)) = old_sample {
         let (t_value, t_distribution, relative_estimates, relative_distributions, base_avg_times) =
             compare(avg_values, &old_sample, config);
         let p_value = t_distribution.p_value(t_value, &Tails::Two);
-        Some(crate::report::ComparisonData {
+        Some(ComparisonData {
             p_value,
             t_distribution,
             t_value,
@@ -71,16 +134,16 @@ pub(crate) fn analysis<'a>(
         })
     } else {
         None
-    };
-
-    MeasurementData {
-        data: Data::new(iters, values),
-        avg_times: labeled_sample,
-        absolute_estimates: estimates,
-        distributions,
-        comparison: compare_data,
-        throughput,
     }
+
+    // MeasurementData {
+    //     data: Data::new(iters, values),
+    //     avg_times: labeled_sample,
+    //     absolute_estimates: estimates,
+    //     distributions,
+    //     comparison: compare_data,
+    //     throughput,
+    // }
 }
 
 // Performs a simple linear regression on the sample

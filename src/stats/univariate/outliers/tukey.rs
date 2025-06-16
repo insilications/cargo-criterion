@@ -54,7 +54,7 @@ use self::Label::*;
 /// NOTE: Due to limitations in the indexing traits, only the label is returned. Once the
 /// `IndexGet` trait lands in stdlib, the indexing operation will return a `(data_point, label)`
 /// pair.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct LabeledSample<'a, A>
 where
     A: Float,

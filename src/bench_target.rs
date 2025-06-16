@@ -1,7 +1,8 @@
 use crate::connection::{AxisScale, Connection, IncomingMessage, PlotConfiguration};
-use crate::model::Model;
+use crate::model::{Benchmark, Model};
 use crate::report::{BenchmarkId, Report, ReportContext};
 use anyhow::{anyhow, Context, Result};
+use itertools::Itertools;
 use std::ffi::OsString;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -167,14 +168,85 @@ impl BenchTarget {
                                 report.group_separator();
                             }
 
+                            // for (x, y) in &model.groups {
+                            //     eprintln!("\nBeginningBenchmark - group: {x} ");
+                            //     for (bx, by) in &y.benchmarks {
+                            //         eprintln!(
+                            //             "benchmark: {bx:?} - target: {:?}",
+                            //             by.raw_analysis_results
+                            //                 .as_ref()
+                            //                 .map(|r| &r.absolute_estimates)
+                            //         );
+                            //     }
+                            // }
                             for (x, y) in &model.groups {
                                 eprintln!("\nBeginningBenchmark - group: {x} ");
-                                for (bx, by) in &y.benchmarks {
-                                    eprintln!(
-                                        "benchmark: {bx:?} - target: {:?}",
-                                        by.target.as_ref()
+                                // for kk in y.benchmarks.values() {}
+                                // for vx in y.benchmarks.iter().combinations(2) {
+                                // for vx in y.benchmarks.values().combinations(2) {
+                                // for vx in y
+                                //     .benchmarks
+                                //     .values()
+                                //     .tuple_combinations::<(&Benchmark, &Benchmark)>()
+                                // {
+                                for (v1, v2) in y.benchmarks.iter().tuple_combinations::<(
+                                    (&BenchmarkId, &Benchmark),
+                                    (&BenchmarkId, &Benchmark),
+                                )>(
+                                ) {
+                                    let comparison_data = crate::analysis::analysis_comparison(
+                                        &v1.1.benchmark_config.as_ref().unwrap(),
+                                        v1.1.raw_analysis_results
+                                            .as_ref()
+                                            .map(|r| crate::analysis::MeasuredValues {
+                                                iteration_count: &r.iter_counts,
+                                                sample_values: &r.sample_times,
+                                                avg_values: &r.avg_times,
+                                            })
+                                            .unwrap(),
+                                        v2.1.raw_analysis_results
+                                            .as_ref()
+                                            .map(|r| {
+                                                let measured_values =
+                                                    crate::analysis::MeasuredValues {
+                                                        iteration_count: &r.iter_counts,
+                                                        sample_values: &r.sample_times,
+                                                        avg_values: &r.avg_times,
+                                                    };
+
+                                                Some((measured_values, &r.absolute_estimates))
+                                            })
+                                            .unwrap(),
+                                    );
+
+                                    eprintln!("{} vs {}", v2.0.as_title(), v1.0.as_title());
+                                    report.show_intra_group_comparison(
+                                        v1.0,
+                                        &context,
+                                        &comparison_data.unwrap(),
+                                        &formatter,
                                     );
                                 }
+                                // for (bx, by) in &y.benchmarks {
+                                // let measured_data = crate::analysis::analysis_comparison(
+                                //     &by.benchmark_config.as_ref().unwrap(),
+                                //     crate::analysis::MeasuredValues {
+                                //         iteration_count: &iters,
+                                //         sample_values: &times,
+                                //         avg_values: &avg_values,
+                                //     },
+                                //     saved_stats.as_ref().map(|stats| {
+                                //         let measured_values = crate::analysis::MeasuredValues {
+                                //             iteration_count: &stats.iterations,
+                                //             sample_values: &stats.values,
+                                //             avg_values: &stats.avg_values,
+                                //         };
+                                //         (measured_values, &stats.estimates)
+                                //     }),
+                                //     sampling_method,
+                                //     report.intra_group_comparison(),
+                                // );
+                                // }
                             }
                         }
                     }
@@ -295,10 +367,16 @@ impl BenchTarget {
                             };
                             (measured_values, &stats.estimates)
                         }),
-                        sampling_method,
+                        &sampling_method,
+                        report.intra_group_comparison(),
                     );
 
-                    if let Err(e) = model.benchmark_complete(&id, &measured_data) {
+                    if let Err(e) = model.benchmark_complete(
+                        &id,
+                        &measured_data,
+                        &Some(&sampling_method),
+                        &Some(&benchmark_config),
+                    ) {
                         error!(
                             "Failed to save results for target {} benchmark {}: {}",
                             self.name,
