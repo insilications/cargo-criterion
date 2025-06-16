@@ -2,6 +2,7 @@ use crate::connection::{AxisScale, Connection, IncomingMessage, PlotConfiguratio
 use crate::model::Model;
 use crate::report::{BenchmarkId, Report, ReportContext};
 use anyhow::{anyhow, Context, Result};
+use itertools::Itertools;
 use std::ffi::OsString;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -167,14 +168,49 @@ impl BenchTarget {
                                 report.group_separator();
                             }
 
+                            // for (x, y) in &model.groups {
+                            //     eprintln!("\nBeginningBenchmark - group: {x} ");
+                            //     for (bx, by) in &y.benchmarks {
+                            //         eprintln!(
+                            //             "benchmark: {bx:?} - target: {:?}",
+                            //             by.raw_analysis_results
+                            //                 .as_ref()
+                            //                 .map(|r| &r.absolute_estimates)
+                            //         );
+                            //     }
+                            // }
                             for (x, y) in &model.groups {
                                 eprintln!("\nBeginningBenchmark - group: {x} ");
-                                for (bx, by) in &y.benchmarks {
-                                    eprintln!(
-                                        "benchmark: {bx:?} - target: {:?}",
-                                        by.target.as_ref()
-                                    );
+                                for vx in y.benchmarks.iter().combinations(2) {
+                                    for (_, by) in vx {
+                                        eprintln!(
+                                            "benchmark: {:?} ",
+                                            by.raw_analysis_results
+                                                .as_ref()
+                                                .map(|r| &r.absolute_estimates)
+                                        );
+                                    }
                                 }
+                                // for (bx, by) in &y.benchmarks {
+                                // let measured_data = crate::analysis::analysis_comparison(
+                                //     &by.benchmark_config.as_ref().unwrap(),
+                                //     crate::analysis::MeasuredValues {
+                                //         iteration_count: &iters,
+                                //         sample_values: &times,
+                                //         avg_values: &avg_values,
+                                //     },
+                                //     saved_stats.as_ref().map(|stats| {
+                                //         let measured_values = crate::analysis::MeasuredValues {
+                                //             iteration_count: &stats.iterations,
+                                //             sample_values: &stats.values,
+                                //             avg_values: &stats.avg_values,
+                                //         };
+                                //         (measured_values, &stats.estimates)
+                                //     }),
+                                //     sampling_method,
+                                //     report.intra_group_comparison(),
+                                // );
+                                // }
                             }
                         }
                     }
@@ -295,10 +331,16 @@ impl BenchTarget {
                             };
                             (measured_values, &stats.estimates)
                         }),
-                        sampling_method,
+                        &sampling_method,
+                        report.intra_group_comparison(),
                     );
 
-                    if let Err(e) = model.benchmark_complete(&id, &measured_data) {
+                    if let Err(e) = model.benchmark_complete(
+                        &id,
+                        &measured_data,
+                        &Some(&sampling_method),
+                        &Some(&benchmark_config),
+                    ) {
                         error!(
                             "Failed to save results for target {} benchmark {}: {}",
                             self.name,

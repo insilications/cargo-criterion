@@ -1,6 +1,6 @@
-use crate::connection::Throughput;
+use crate::connection::{SamplingMethod, Throughput};
 use crate::estimate::{ChangeEstimates, Estimates};
-use crate::report::{BenchmarkId, ComparisonData, MeasurementData};
+use crate::report::{BenchmarkId, ComparisonData, MeasurementData, OwnedMeasurementData};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use linked_hash_map::LinkedHashMap;
@@ -15,13 +15,24 @@ pub struct Benchmark {
     pub latest_stats: SavedStatistics,
     pub previous_stats: Option<SavedStatistics>,
     pub target: Option<String>,
+    pub raw_analysis_results: Option<OwnedMeasurementData>,
+    pub sampling_method: Option<SamplingMethod>,
+    pub benchmark_config: Option<crate::analysis::BenchmarkConfig>,
 }
 impl Benchmark {
-    fn new(stats: SavedStatistics) -> Self {
+    fn new(
+        stats: SavedStatistics,
+        meas: &Option<&OwnedMeasurementData>,
+        sampling_method: &Option<&SamplingMethod>,
+        benchmark_config: &Option<&crate::analysis::BenchmarkConfig>,
+    ) -> Self {
         Benchmark {
             latest_stats: stats,
             previous_stats: None,
             target: None,
+            raw_analysis_results: meas.cloned(),
+            sampling_method: sampling_method.cloned(),
+            benchmark_config: benchmark_config.cloned(),
         }
     }
 
@@ -116,7 +127,10 @@ impl Model {
             .entry(benchmark_record.id.group_id.clone())
             .or_insert_with(Default::default)
             .benchmarks
-            .insert(benchmark_record.id.into(), Benchmark::new(saved_stats));
+            .insert(
+                benchmark_record.id.into(),
+                Benchmark::new(saved_stats, &None, &None, &None),
+            );
         Ok(())
     }
 
@@ -149,6 +163,8 @@ impl Model {
         &mut self,
         id: &BenchmarkId,
         analysis_results: &MeasurementData,
+        sampling_method: &Option<&SamplingMethod>,
+        benchmark_config: &Option<&crate::analysis::BenchmarkConfig>,
     ) -> Result<()> {
         let dir = path!(&self.data_directory, id.as_directory_name());
 
@@ -216,7 +232,12 @@ impl Model {
 
         match benchmark_entry {
             vacant @ linked_hash_map::Entry::Vacant(_) => {
-                vacant.or_insert(Benchmark::new(saved_stats));
+                vacant.or_insert(Benchmark::new(
+                    saved_stats,
+                    &Some(&OwnedMeasurementData::from(analysis_results)),
+                    sampling_method,
+                    benchmark_config,
+                ));
             }
             linked_hash_map::Entry::Occupied(mut occupied) => {
                 occupied.get_mut().add_stats(saved_stats)

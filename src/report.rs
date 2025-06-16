@@ -51,6 +51,41 @@ impl MeasurementData<'_> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct OwnedMeasurementData {
+    pub iter_counts: Vec<f64>,
+    pub sample_times: Vec<f64>,
+    pub avg_times: Vec<f64>,
+    pub absolute_estimates: Estimates,
+    pub distributions: Distributions,
+    // pub comparison: Option<ComparisonData>,
+    pub throughput: Option<Throughput>,
+}
+
+impl From<&MeasurementData<'_>> for OwnedMeasurementData {
+    fn from(meas: &MeasurementData<'_>) -> Self {
+        OwnedMeasurementData {
+            iter_counts: meas.iter_counts().to_vec(),
+            sample_times: meas.sample_times().to_vec(),
+            avg_times: meas.avg_times.to_vec(),
+            absolute_estimates: meas.absolute_estimates.clone(),
+            distributions: meas.distributions.clone(),
+            // comparison: meas.comparison.clone(),
+            throughput: meas.throughput.clone(),
+        }
+    }
+}
+
+impl OwnedMeasurementData {
+    pub fn iter_counts(&self) -> &Sample<f64> {
+        Sample::new(&self.iter_counts)
+    }
+
+    pub fn sample_times(&self) -> &Sample<f64> {
+        Sample::new(&self.sample_times)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ValueType {
     Bytes,
@@ -291,6 +326,10 @@ pub trait Report {
         _formatter: &ValueFormatter,
     ) {
     }
+
+    fn intra_group_comparison(&self) -> bool {
+        false
+    }
 }
 
 pub enum CliReports {
@@ -359,6 +398,13 @@ impl Report for CliReports {
         match self {
             CliReports::Cli(report) => report.group_separator(),
             CliReports::CliIntraGroup(report) => report.group_separator(),
+        }
+    }
+
+    fn intra_group_comparison(&self) -> bool {
+        match self {
+            CliReports::Cli(report) => false,
+            CliReports::CliIntraGroup(report) => true,
         }
     }
 }

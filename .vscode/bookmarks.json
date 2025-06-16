@@ -4,7 +4,12 @@
 			"path": "src/bench_target.rs",
 			"bookmarks": [
 				{
-					"line": 281,
+					"line": 156,
+					"column": 20,
+					"label": ""
+				},
+				{
+					"line": 317,
 					"column": 66,
 					"label": ""
 				}
@@ -14,13 +19,18 @@
 			"path": "src/report.rs",
 			"bookmarks": [
 				{
-					"line": 617,
+					"line": 663,
 					"column": 17,
 					"label": ""
 				},
 				{
-					"line": 626,
+					"line": 672,
 					"column": 10,
+					"label": ""
+				},
+				{
+					"line": 1014,
+					"column": 16,
 					"label": ""
 				}
 			]
@@ -39,23 +49,18 @@
 			"path": "src/analysis.rs",
 			"bookmarks": [
 				{
-					"line": 46,
+					"line": 32,
+					"column": 27,
+					"label": ""
+				},
+				{
+					"line": 47,
 					"column": 52,
 					"label": ""
 				},
 				{
-					"line": 139,
+					"line": 202,
 					"column": 49,
-					"label": ""
-				}
-			]
-		},
-		{
-			"path": "src/model.rs",
-			"bookmarks": [
-				{
-					"line": 174,
-					"column": 43,
 					"label": ""
 				}
 			]

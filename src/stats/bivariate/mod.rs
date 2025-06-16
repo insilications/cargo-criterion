@@ -16,6 +16,7 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 ///
 /// - No `NaN`s in the data
 /// - At least two data points in the set
+#[derive(Debug)]
 pub struct Data<'a, X, Y>(&'a [X], &'a [Y]);
 
 impl<X, Y> Copy for Data<'_, X, Y> {}
