@@ -17,7 +17,7 @@ pub struct Benchmark {
     pub target: Option<String>,
     pub raw_analysis_results: Option<OwnedMeasurementData>,
     pub sampling_method: Option<SamplingMethod>,
-    pub benchmark_config: Option<crate::analysis::BenchmarkConfig>,
+    pub config: Option<crate::analysis::BenchmarkConfig>,
 }
 impl Benchmark {
     fn new(
@@ -32,7 +32,7 @@ impl Benchmark {
             target: None,
             raw_analysis_results: meas.cloned(),
             sampling_method: sampling_method.cloned(),
-            benchmark_config: benchmark_config.cloned(),
+            config: benchmark_config.cloned(),
         }
     }
 
@@ -62,15 +62,15 @@ impl Default for BenchmarkGroup {
 #[derive(Debug)]
 pub struct Model {
     // Path to output directory
-    data_directory: PathBuf,
+    pub data_directory: PathBuf,
     // Track all of the unique benchmark titles and directories we've seen, so we can uniquify them.
-    all_titles: HashSet<String>,
-    all_directories: HashSet<PathBuf>,
+    pub all_titles: HashSet<String>,
+    pub all_directories: HashSet<PathBuf>,
     // All of the known benchmark groups, stored in execution order (where possible).
     pub groups: LinkedHashMap<String, BenchmarkGroup>,
 
-    history_id: Option<String>,
-    history_description: Option<String>,
+    pub history_id: Option<String>,
+    pub history_description: Option<String>,
 }
 impl Model {
     /// Load the model from disk. The output directory is scanned for benchmark files. Any files
@@ -154,17 +154,28 @@ impl Model {
                 benchmark.target = Some(target.to_owned());
             }
 
+            eprintln!(
+                "\nadd_benchmark_id INSERT AGAIN Adding benchmark {} to group {}",
+                id.as_title(),
+                id.group_id
+            );
             // Remove and re-insert to move the benchmark to the end of its list.
             group.benchmarks.insert(id.clone(), benchmark);
         }
+
+        eprintln!(
+            "\nadd_benchmark_id NOT INSERT AGAIN Adding benchmark {} to group {}",
+            id.as_title(),
+            id.group_id
+        );
     }
 
     pub fn benchmark_complete(
         &mut self,
         id: &BenchmarkId,
         analysis_results: &MeasurementData,
-        sampling_method: &Option<&SamplingMethod>,
-        benchmark_config: &Option<&crate::analysis::BenchmarkConfig>,
+        sampling_method: &SamplingMethod,
+        benchmark_config: &crate::analysis::BenchmarkConfig,
     ) -> Result<()> {
         let dir = path!(&self.data_directory, id.as_directory_name());
 
@@ -232,15 +243,25 @@ impl Model {
 
         match benchmark_entry {
             vacant @ linked_hash_map::Entry::Vacant(_) => {
+                eprintln!(
+                    "\nVACANT - Adding benchmark {} to group {}",
+                    id.as_title(),
+                    id.group_id
+                );
                 vacant.or_insert(Benchmark::new(
                     saved_stats,
                     &Some(&OwnedMeasurementData::from(analysis_results)),
-                    sampling_method,
-                    benchmark_config,
+                    &Some(sampling_method),
+                    &Some(benchmark_config),
                 ));
             }
             linked_hash_map::Entry::Occupied(mut occupied) => {
-                occupied.get_mut().add_stats(saved_stats)
+                eprintln!(
+                    "\nOCCUPIED - Adding benchmark {} to group {}",
+                    id.as_title(),
+                    id.group_id
+                );
+                occupied.get_mut().add_stats(saved_stats);
             }
         };
         Ok(())

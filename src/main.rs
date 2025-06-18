@@ -40,10 +40,14 @@ mod value_formatter;
 
 use crate::config::{OutputFormat, PlottingBackend, SelfConfig, TextColor};
 use crate::connection::{AxisScale, PlotConfiguration};
+use crate::model::Model;
 use crate::plot::Plotter;
 use crate::report::{Report, ReportContext};
 use anyhow::Error;
 use lazy_static::lazy_static;
+use linked_hash_map::LinkedHashMap;
+use std::collections::HashSet;
+use std::path::PathBuf;
 
 lazy_static! {
     static ref DEBUG_ENABLED: bool = std::env::var_os("CRITERION_DEBUG").is_some();
@@ -87,12 +91,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } = compile::compile(self_config.debug_build, &configuration.cargo_args)?;
 
     // Load the saved measurements from the last run.
-    let mut run_model = model::Model::load(
-        self_config.criterion_home.clone(),
-        "main".into(),
-        self_config.history_id.clone(),
-        self_config.history_description.clone(),
-    );
+    let mut run_model = if self_config.intra_group_comparison {
+        eprintln!("self_config.intra_group_comparison ");
+        Model {
+            data_directory: path!(
+                self_config.criterion_home.clone(),
+                "data",
+                PathBuf::from("main")
+            ),
+            all_titles: HashSet::new(),
+            all_directories: HashSet::new(),
+            groups: LinkedHashMap::new(),
+            history_id: self_config.history_id.clone(),
+            history_description: self_config.history_description.clone(),
+        }
+    } else {
+        model::Model::load(
+            self_config.criterion_home.clone(),
+            "main".into(),
+            self_config.history_id.clone(),
+            self_config.history_description.clone(),
+        )
+    };
 
     // Set up the reports. These receive notifications as the benchmarks proceed and generate output for the user.
     let cli_report = configure_cli_output(self_config);
@@ -127,6 +147,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &reports,
                 &mut run_model,
                 self_config.message_format.is_some(),
+                self_config.intra_group_comparison,
             );
 
             if let Err(err) = err {

@@ -1,6 +1,7 @@
 use crate::connection::{AxisScale, Connection, IncomingMessage, PlotConfiguration};
+use crate::estimate::Estimates;
 use crate::model::{Benchmark, Model};
-use crate::report::{BenchmarkId, Report, ReportContext};
+use crate::report::{BenchmarkId, ComparisonReport, OwnedMeasurementData, Report, ReportContext};
 use anyhow::{anyhow, Context, Result};
 use itertools::Itertools;
 use std::ffi::OsString;
@@ -34,6 +35,7 @@ impl BenchTarget {
         report: &dyn Report,
         model: &mut Model,
         redirect_stdout: bool,
+        intra_group_comparison: bool,
     ) -> Result<()> {
         let listener = TcpListener::bind("localhost:0")
             .context("Unable to open socket to connect to Criterion.rs")?;
@@ -86,7 +88,14 @@ impl BenchTarget {
                     let conn = Connection::new(socket).with_context(|| {
                         format!("Unable to open connection to bench target {}", self.name)
                     })?;
-                    return self.communicate(&mut child, conn, report, criterion_home, model);
+                    return self.communicate(
+                        &mut child,
+                        conn,
+                        report,
+                        criterion_home,
+                        model,
+                        intra_group_comparison,
+                    );
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     // No connection yet, try again in a bit.
@@ -132,6 +141,7 @@ impl BenchTarget {
         report: &dyn Report,
         criterion_home: &std::path::Path,
         model: &mut Model,
+        intra_group_comparison: bool,
     ) -> Result<()> {
         let mut context = ReportContext {
             output_directory: criterion_home.join("reports"),
@@ -158,7 +168,7 @@ impl BenchTarget {
                         let benchmark_group = model.add_benchmark_group(&self.name, &group);
 
                         eprintln!(
-                            "FinishedBenchmarkGroup - name: {} - group: {}",
+                            "============ FinishedBenchmarkGroup - name: {} - group: {} ============\n",
                             self.name, group
                         );
                         {
@@ -167,94 +177,60 @@ impl BenchTarget {
                             if any_from_group_executed {
                                 report.group_separator();
                             }
-
-                            // for (x, y) in &model.groups {
-                            //     eprintln!("\nBeginningBenchmark - group: {x} ");
-                            //     for (bx, by) in &y.benchmarks {
-                            //         eprintln!(
-                            //             "benchmark: {bx:?} - target: {:?}",
-                            //             by.raw_analysis_results
-                            //                 .as_ref()
-                            //                 .map(|r| &r.absolute_estimates)
-                            //         );
-                            //     }
-                            // }
-                            for (x, y) in &model.groups {
-                                eprintln!("\nBeginningBenchmark - group: {x} ");
-                                // for kk in y.benchmarks.values() {}
-                                // for vx in y.benchmarks.iter().combinations(2) {
-                                // for vx in y.benchmarks.values().combinations(2) {
-                                // for vx in y
-                                //     .benchmarks
-                                //     .values()
-                                //     .tuple_combinations::<(&Benchmark, &Benchmark)>()
-                                // {
-                                for (v1, v2) in y.benchmarks.iter().tuple_combinations::<(
-                                    (&BenchmarkId, &Benchmark),
-                                    (&BenchmarkId, &Benchmark),
-                                )>(
-                                ) {
-                                    let comparison_data = crate::analysis::analysis_comparison(
-                                        &v1.1.benchmark_config.as_ref().unwrap(),
-                                        v1.1.raw_analysis_results
-                                            .as_ref()
-                                            .map(|r| crate::analysis::MeasuredValues {
-                                                iteration_count: &r.iter_counts,
-                                                sample_values: &r.sample_times,
-                                                avg_values: &r.avg_times,
-                                            })
-                                            .unwrap(),
-                                        v2.1.raw_analysis_results
-                                            .as_ref()
-                                            .map(|r| {
-                                                let measured_values =
-                                                    crate::analysis::MeasuredValues {
-                                                        iteration_count: &r.iter_counts,
-                                                        sample_values: &r.sample_times,
-                                                        avg_values: &r.avg_times,
-                                                    };
-
-                                                Some((measured_values, &r.absolute_estimates))
-                                            })
-                                            .unwrap(),
-                                    );
-
-                                    eprintln!("{} vs {}", v2.0.as_title(), v1.0.as_title());
-                                    report.show_intra_group_comparison(
-                                        v1.0,
-                                        &context,
-                                        &comparison_data.unwrap(),
-                                        &formatter,
-                                    );
-                                }
-                                // for (bx, by) in &y.benchmarks {
-                                // let measured_data = crate::analysis::analysis_comparison(
-                                //     &by.benchmark_config.as_ref().unwrap(),
-                                //     crate::analysis::MeasuredValues {
-                                //         iteration_count: &iters,
-                                //         sample_values: &times,
-                                //         avg_values: &avg_values,
-                                //     },
-                                //     saved_stats.as_ref().map(|stats| {
-                                //         let measured_values = crate::analysis::MeasuredValues {
-                                //             iteration_count: &stats.iterations,
-                                //             sample_values: &stats.values,
-                                //             avg_values: &stats.avg_values,
-                                //         };
-                                //         (measured_values, &stats.estimates)
-                                //     }),
-                                //     sampling_method,
-                                //     report.intra_group_comparison(),
-                                // );
-                                // }
-                            }
                         }
                     }
                     IncomingMessage::BeginningBenchmark { id } => {
                         any_from_group_executed = true;
                         let mut id = id.into();
+                        eprintln!(
+                            "\n\n============ START BeginningBenchmark - name: {} - id: {} ============\n",
+                            self.name, id
+                        );
+                        for (group_id, group) in &model.groups {
+                            eprintln!("\nBeginningBenchmark 0 group_id: {group_id}");
+                            for (benchmark_id, benchmark) in &group.benchmarks {
+                                eprintln!(
+                                    "BeginningBenchmark 0 benchmark_id: {benchmark_id} - benchmark.raw_analysis_results.is_none(): {}", benchmark.raw_analysis_results.is_none()
+                                );
+                            }
+                        }
+                        eprintln!("\n");
+
                         model.add_benchmark_id(&self.name, &mut id);
-                        self.run_benchmark(&mut conn, report, model, id, &mut context)?;
+
+                        for (group_id, group) in &model.groups {
+                            eprintln!("\nBeginningBenchmark 1 group_id: {group_id}");
+                            for (benchmark_id, benchmark) in &group.benchmarks {
+                                eprintln!(
+                                    "BeginningBenchmark 1 benchmark_id: {benchmark_id} - benchmark.raw_analysis_results.is_none(): {}", benchmark.raw_analysis_results.is_none()
+                                );
+                            }
+                        }
+                        eprintln!("\n");
+
+                        self.run_benchmark(
+                            &mut conn,
+                            report,
+                            model,
+                            id,
+                            &mut context,
+                            intra_group_comparison,
+                        )?;
+
+                        for (group_id, group) in &model.groups {
+                            eprintln!("\nBeginningBenchmark 2 group_id: {group_id}");
+                            for (benchmark_id, benchmark) in &group.benchmarks {
+                                eprintln!(
+                                    "BeginningBenchmark 2 benchmark_id: {benchmark_id} - benchmark.raw_analysis_results.is_none(): {}", benchmark.raw_analysis_results.is_none()
+                                );
+                            }
+                        }
+                        eprintln!("\n");
+
+                        eprintln!(
+                            "\n\n============ END BeginningBenchmark - name: {} ============\n",
+                            self.name
+                        );
                     }
                     IncomingMessage::SkippingBenchmark { id } => {
                         let mut id = id.into();
@@ -273,6 +249,77 @@ impl BenchTarget {
                 }
                 Ok(Some(exit_status)) => {
                     if exit_status.success() {
+                        if intra_group_comparison {
+                            let formatter = crate::value_formatter::ValueFormatter::new(&mut conn);
+                            for (group_id, benchmark_group) in &model.groups {
+                                eprintln!("\nPrinting Comparisons - group_id: {group_id} ");
+                                let mut comparisons: Vec<ComparisonReport> = Vec::new();
+                                for combinations in
+                                    benchmark_group.benchmarks.iter().tuple_combinations::<(
+                                        (&BenchmarkId, &Benchmark),
+                                        (&BenchmarkId, &Benchmark),
+                                    )>(
+                                    )
+                                {
+                                    let ((id_new, benchmark_new), (id_old, benchmark_old)): (
+                                        (&BenchmarkId, &Benchmark),
+                                        (&BenchmarkId, &Benchmark),
+                                    ) = combinations;
+                                    let comp = crate::analysis::analysis_comparison(
+                                        benchmark_new.config.as_ref().unwrap(),
+                                        &benchmark_new
+                                            .raw_analysis_results
+                                            .as_ref()
+                                            .map(|r: &OwnedMeasurementData| -> crate::analysis::MeasuredValues<'_> {
+                                                crate::analysis::MeasuredValues {
+                                                    iteration_count: &r.iter_counts,
+                                                    sample_values: &r.sample_times,
+                                                    avg_values: &r.avg_times,
+                                                }
+                                            })
+                                            .unwrap(),
+                                        &benchmark_old
+                                            .raw_analysis_results
+                                            .as_ref()
+                                            .map(
+                                                |r: &OwnedMeasurementData| -> (
+                                                    crate::analysis::MeasuredValues<'_>,
+                                                    &'_ Estimates,
+                                                ) {
+                                                    (
+                                                        crate::analysis::MeasuredValues {
+                                                            iteration_count: &r.iter_counts,
+                                                            sample_values: &r.sample_times,
+                                                            avg_values: &r.avg_times,
+                                                        },
+                                                        &r.absolute_estimates,
+                                                    )
+                                                },
+                                            )
+                                            .unwrap(),
+                                    );
+
+                                    comparisons.push(ComparisonReport {
+                                        id_new,
+                                        id_old,
+                                        benchmark_new,
+                                        benchmark_old,
+                                        comp,
+                                    });
+                                }
+
+                                if !comparisons.is_empty() {
+                                    report.show_intra_group_comparison(
+                                        group_id,
+                                        &comparisons,
+                                        &context,
+                                        &formatter,
+                                    );
+                                }
+                                drop(comparisons);
+                            }
+                        }
+                        eprintln!("RETURN OKK");
                         return Ok(());
                     } else {
                         return Err(anyhow!(
@@ -295,6 +342,7 @@ impl BenchTarget {
         model: &mut Model,
         id: BenchmarkId,
         context: &mut ReportContext,
+        intra_group_comparison: bool,
     ) -> Result<()> {
         report.benchmark_start(&id, context);
 
@@ -368,14 +416,14 @@ impl BenchTarget {
                             (measured_values, &stats.estimates)
                         }),
                         &sampling_method,
-                        report.intra_group_comparison(),
+                        intra_group_comparison,
                     );
 
                     if let Err(e) = model.benchmark_complete(
                         &id,
                         &measured_data,
-                        &Some(&sampling_method),
-                        &Some(&benchmark_config),
+                        &sampling_method,
+                        &benchmark_config,
                     ) {
                         error!(
                             "Failed to save results for target {} benchmark {}: {}",
