@@ -177,6 +177,76 @@ impl BenchTarget {
                             if any_from_group_executed {
                                 report.group_separator();
                             }
+
+                            if intra_group_comparison {
+                                for (group_id, benchmark_group) in &model.groups {
+                                    eprintln!("\nPrinting Comparisons - group_id: {group_id} ");
+                                    let mut comparisons: Vec<ComparisonReport> = Vec::new();
+                                    for combinations in
+                                        benchmark_group.benchmarks.iter().tuple_combinations::<(
+                                            (&BenchmarkId, &Benchmark),
+                                            (&BenchmarkId, &Benchmark),
+                                        )>(
+                                        )
+                                    {
+                                        let ((id_new, benchmark_new), (id_old, benchmark_old)): (
+                                            (&BenchmarkId, &Benchmark),
+                                            (&BenchmarkId, &Benchmark),
+                                        ) = combinations;
+                                        let comp = crate::analysis::analysis_comparison(
+                                        benchmark_new.config.as_ref().unwrap(),
+                                        &benchmark_new
+                                            .raw_analysis_results
+                                            .as_ref()
+                                            .map(|r: &OwnedMeasurementData| -> crate::analysis::MeasuredValues<'_> {
+                                                crate::analysis::MeasuredValues {
+                                                    iteration_count: &r.iter_counts,
+                                                    sample_values: &r.sample_times,
+                                                    avg_values: &r.avg_times,
+                                                }
+                                            })
+                                            .unwrap(),
+                                        &benchmark_old
+                                            .raw_analysis_results
+                                            .as_ref()
+                                            .map(
+                                                |r: &OwnedMeasurementData| -> (
+                                                    crate::analysis::MeasuredValues<'_>,
+                                                    &'_ Estimates,
+                                                ) {
+                                                    (
+                                                        crate::analysis::MeasuredValues {
+                                                            iteration_count: &r.iter_counts,
+                                                            sample_values: &r.sample_times,
+                                                            avg_values: &r.avg_times,
+                                                        },
+                                                        &r.absolute_estimates,
+                                                    )
+                                                },
+                                            )
+                                            .unwrap(),
+                                    );
+
+                                        comparisons.push(ComparisonReport {
+                                            id_new,
+                                            id_old,
+                                            benchmark_new,
+                                            benchmark_old,
+                                            comp,
+                                        });
+                                    }
+
+                                    if !comparisons.is_empty() {
+                                        report.show_intra_group_comparison(
+                                            group_id,
+                                            &comparisons,
+                                            &context,
+                                            &formatter,
+                                        );
+                                    }
+                                    drop(comparisons);
+                                }
+                            }
                         }
                     }
                     IncomingMessage::BeginningBenchmark { id } => {
@@ -249,76 +319,76 @@ impl BenchTarget {
                 }
                 Ok(Some(exit_status)) => {
                     if exit_status.success() {
-                        if intra_group_comparison {
-                            let formatter = crate::value_formatter::ValueFormatter::new(&mut conn);
-                            for (group_id, benchmark_group) in &model.groups {
-                                eprintln!("\nPrinting Comparisons - group_id: {group_id} ");
-                                let mut comparisons: Vec<ComparisonReport> = Vec::new();
-                                for combinations in
-                                    benchmark_group.benchmarks.iter().tuple_combinations::<(
-                                        (&BenchmarkId, &Benchmark),
-                                        (&BenchmarkId, &Benchmark),
-                                    )>(
-                                    )
-                                {
-                                    let ((id_new, benchmark_new), (id_old, benchmark_old)): (
-                                        (&BenchmarkId, &Benchmark),
-                                        (&BenchmarkId, &Benchmark),
-                                    ) = combinations;
-                                    let comp = crate::analysis::analysis_comparison(
-                                        benchmark_new.config.as_ref().unwrap(),
-                                        &benchmark_new
-                                            .raw_analysis_results
-                                            .as_ref()
-                                            .map(|r: &OwnedMeasurementData| -> crate::analysis::MeasuredValues<'_> {
-                                                crate::analysis::MeasuredValues {
-                                                    iteration_count: &r.iter_counts,
-                                                    sample_values: &r.sample_times,
-                                                    avg_values: &r.avg_times,
-                                                }
-                                            })
-                                            .unwrap(),
-                                        &benchmark_old
-                                            .raw_analysis_results
-                                            .as_ref()
-                                            .map(
-                                                |r: &OwnedMeasurementData| -> (
-                                                    crate::analysis::MeasuredValues<'_>,
-                                                    &'_ Estimates,
-                                                ) {
-                                                    (
-                                                        crate::analysis::MeasuredValues {
-                                                            iteration_count: &r.iter_counts,
-                                                            sample_values: &r.sample_times,
-                                                            avg_values: &r.avg_times,
-                                                        },
-                                                        &r.absolute_estimates,
-                                                    )
-                                                },
-                                            )
-                                            .unwrap(),
-                                    );
+                        // if intra_group_comparison {
+                        //     let formatter = crate::value_formatter::ValueFormatter::new(&mut conn);
+                        //     for (group_id, benchmark_group) in &model.groups {
+                        //         eprintln!("\nPrinting Comparisons - group_id: {group_id} ");
+                        //         let mut comparisons: Vec<ComparisonReport> = Vec::new();
+                        //         for combinations in
+                        //             benchmark_group.benchmarks.iter().tuple_combinations::<(
+                        //                 (&BenchmarkId, &Benchmark),
+                        //                 (&BenchmarkId, &Benchmark),
+                        //             )>(
+                        //             )
+                        //         {
+                        //             let ((id_new, benchmark_new), (id_old, benchmark_old)): (
+                        //                 (&BenchmarkId, &Benchmark),
+                        //                 (&BenchmarkId, &Benchmark),
+                        //             ) = combinations;
+                        //             let comp = crate::analysis::analysis_comparison(
+                        //                 benchmark_new.config.as_ref().unwrap(),
+                        //                 &benchmark_new
+                        //                     .raw_analysis_results
+                        //                     .as_ref()
+                        //                     .map(|r: &OwnedMeasurementData| -> crate::analysis::MeasuredValues<'_> {
+                        //                         crate::analysis::MeasuredValues {
+                        //                             iteration_count: &r.iter_counts,
+                        //                             sample_values: &r.sample_times,
+                        //                             avg_values: &r.avg_times,
+                        //                         }
+                        //                     })
+                        //                     .unwrap(),
+                        //                 &benchmark_old
+                        //                     .raw_analysis_results
+                        //                     .as_ref()
+                        //                     .map(
+                        //                         |r: &OwnedMeasurementData| -> (
+                        //                             crate::analysis::MeasuredValues<'_>,
+                        //                             &'_ Estimates,
+                        //                         ) {
+                        //                             (
+                        //                                 crate::analysis::MeasuredValues {
+                        //                                     iteration_count: &r.iter_counts,
+                        //                                     sample_values: &r.sample_times,
+                        //                                     avg_values: &r.avg_times,
+                        //                                 },
+                        //                                 &r.absolute_estimates,
+                        //                             )
+                        //                         },
+                        //                     )
+                        //                     .unwrap(),
+                        //             );
 
-                                    comparisons.push(ComparisonReport {
-                                        id_new,
-                                        id_old,
-                                        benchmark_new,
-                                        benchmark_old,
-                                        comp,
-                                    });
-                                }
+                        //             comparisons.push(ComparisonReport {
+                        //                 id_new,
+                        //                 id_old,
+                        //                 benchmark_new,
+                        //                 benchmark_old,
+                        //                 comp,
+                        //             });
+                        //         }
 
-                                if !comparisons.is_empty() {
-                                    report.show_intra_group_comparison(
-                                        group_id,
-                                        &comparisons,
-                                        &context,
-                                        &formatter,
-                                    );
-                                }
-                                drop(comparisons);
-                            }
-                        }
+                        //         if !comparisons.is_empty() {
+                        //             report.show_intra_group_comparison(
+                        //                 group_id,
+                        //                 &comparisons,
+                        //                 &context,
+                        //                 &formatter,
+                        //             );
+                        //         }
+                        //         drop(comparisons);
+                        //     }
+                        // }
                         eprintln!("RETURN OKK");
                         return Ok(());
                     } else {

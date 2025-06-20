@@ -95,17 +95,15 @@ pub(crate) fn analysis<'a>(
 
 pub fn analysis_comparison<'a>(
     config: &BenchmarkConfig,
-    // throughput: Option<Throughput>,
     new_sample: &MeasuredValues<'a>,
     old_sample: &(MeasuredValues<'a>, &'a Estimates),
-    // old_sample: Option<(MeasuredValues<'a>, &'a Estimates)>,
-    // sampling_method: SamplingMethod,
 ) -> ComparisonData {
     let avg_values = Sample::new(new_sample.avg_values);
 
     let (t_value, t_distribution, relative_estimates, relative_distributions, base_avg_times) =
         compare(avg_values, &old_sample.0, config);
     let p_value = t_distribution.p_value(t_value, &Tails::Two);
+
     ComparisonData {
         p_value,
         t_distribution,
