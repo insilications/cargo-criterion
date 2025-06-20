@@ -31,6 +31,21 @@ pub struct ComparisonReport<'a> {
     pub comp: ComparisonData,
 }
 
+#[derive(Debug)]
+pub enum ComparisonReportResult {
+    Improved,
+    Regressed,
+    NonSignificant,
+    // NoChange,
+}
+
+#[derive(Debug)]
+pub struct ComparisonReportResults {
+    pub function_id_new: String,
+    pub function_id_old: String,
+    pub result: ComparisonReportResult,
+}
+
 pub struct ComparisonData {
     pub p_value: f64,
     pub t_distribution: Distribution<f64>,
@@ -1250,9 +1265,8 @@ impl Report for CliReportIntraGroup {
     ) {
         self.text_overwrite();
 
-        // let rows: Vec<Vec<Box<dyn CellStruct>>> = Vec::new();
+        let mut comparison_report_results: Vec<ComparisonReportResults> = Vec::new();
         let mut data: Vec<Vec<CellStruct>> = Vec::new();
-
         for comparison in comparisons {
             let mut rows: Vec<CellStruct> = Vec::new();
 
@@ -1260,7 +1274,6 @@ impl Report for CliReportIntraGroup {
                 comparison.comp.p_value < comparison.comp.significance_threshold;
             let mean_diff_est = &comparison.comp.relative_estimates.mean;
             let mean_diff_point_estimate = mean_diff_est.point_estimate;
-            // let mut point_estimate_str = formatter.format_value(point_estimate);
             let benchmark_old_mean = comparison
                 .benchmark_old
                 .raw_analysis_results
@@ -1282,80 +1295,94 @@ impl Report for CliReportIntraGroup {
             let mean_diff_ci_upper_bound =
                 mean_diff_est.confidence_interval.upper_bound * benchmark_old_mean;
             let mean_diff_pct_str = format::change(mean_diff_point_estimate.abs(), false);
+            let noise_threshold = comparison.comp.noise_threshold;
+            let function_id_old_str = comparison.id_old.function_id.as_ref().unwrap().to_owned();
+            let function_id_new_str = comparison.id_new.function_id.as_ref().unwrap().to_owned();
             let explanation_str: String;
 
             let mut mean_diff = format!("{:+.2} ns", mean_diff_point_estimate * benchmark_old_mean);
-            let mut function_id_old = comparison.id_old.function_id.as_ref().unwrap().to_owned();
-            let mut function_id_new = comparison.id_new.function_id.as_ref().unwrap().to_owned();
+            // let mut function_id_old_color_str =
+            // comparison.id_old.function_id.as_ref().unwrap().to_owned();
+            // let mut function_id_new_color_str =
+            // comparison.id_new.function_id.as_ref().unwrap().to_owned();
+            let mut function_id_old_color_str = function_id_old_str.clone();
+            let mut function_id_new_color_str = function_id_new_str.clone();
             let mut benchmark_old_mean_str = formatter.format_value(benchmark_old_mean);
             let mut benchmark_new_mean_str = formatter.format_value(benchmark_new_mean);
 
             if is_mean_different {
-                let comparison =
-                    compare_to_threshold(mean_diff_est, comparison.comp.noise_threshold);
+                let comparison = compare_to_threshold(mean_diff_est, noise_threshold);
                 match comparison {
                     ComparisonResult::Improved => {
                         mean_diff = self.green(self.bold(mean_diff));
                         benchmark_new_mean_str = self.green(self.bold(benchmark_new_mean_str));
                         benchmark_old_mean_str = self.red(benchmark_old_mean_str);
-                        function_id_new = self.green(self.bold(function_id_new));
-                        function_id_old = self.red(function_id_old);
+                        function_id_new_color_str =
+                            self.green(self.bold(function_id_new_color_str));
+                        function_id_old_color_str = self.red(function_id_old_color_str);
                         explanation_str = format!(
                             "Performance has {}",
                             self.green(format!("improved {mean_diff_pct_str}"))
                         );
+                        comparison_report_results.push(ComparisonReportResults {
+                            function_id_new: function_id_new_str,
+                            function_id_old: function_id_old_str,
+                            result: ComparisonReportResult::Improved,
+                        });
                     }
                     ComparisonResult::Regressed => {
                         mean_diff = self.red(mean_diff);
                         benchmark_new_mean_str = self.red(benchmark_new_mean_str);
                         benchmark_old_mean_str = self.green(self.bold(benchmark_old_mean_str));
-                        function_id_new = self.red(function_id_new);
-                        function_id_old = self.green(self.bold(function_id_old));
+                        function_id_new_color_str = self.red(function_id_new_color_str);
+                        function_id_old_color_str =
+                            self.green(self.bold(function_id_old_color_str));
                         explanation_str = format!(
                             "Performance has {}",
                             self.red(format!("regressed {mean_diff_pct_str}"))
                         );
+                        comparison_report_results.push(ComparisonReportResults {
+                            function_id_new: function_id_new_str,
+                            function_id_old: function_id_old_str,
+                            result: ComparisonReportResult::Regressed,
+                        });
                     }
                     ComparisonResult::NonSignificant => {
-                        explanation_str =
-                            format!("Changed {mean_diff_pct_str} within noise threshold");
+                        explanation_str = format!(
+                            "Changed {mean_diff_pct_str} within noise threshold of {noise_threshold:.2} ns",
+                        );
+                        comparison_report_results.push(ComparisonReportResults {
+                            function_id_new: function_id_new_str,
+                            function_id_old: function_id_old_str,
+                            result: ComparisonReportResult::NonSignificant,
+                        });
                     }
                 }
             } else {
                 explanation_str = "No change in performance detected".to_owned();
+                comparison_report_results.push(ComparisonReportResults {
+                    function_id_new: function_id_new_str,
+                    function_id_old: function_id_old_str,
+                    // result: ComparisonReportResult::NoChange,
+                    result: ComparisonReportResult::NonSignificant,
+                });
             }
 
-            // let change = format!(
-            //     "change: [{} {} {}] (p = {:.7} {} {:.7}) - {}",
-            //     self.faint(format::change(
-            //         mean_est.confidence_interval.lower_bound,
-            //         true
-            //     )),
-            //     point_estimate_str,
-            //     self.faint(format::change(
-            //         mean_est.confidence_interval.upper_bound,
-            //         true
-            //     )),
-            //     comp.p_value,
-            //     if different_mean { "<" } else { ">" },
-            //     comp.significance_threshold,
-            //     &explanation_str
-            // );
-
             rows.push(
-                format!("{} vs {}", &function_id_old, &function_id_new)
-                    .cell()
-                    .justify(Justify::Center)
-                    .align(Align::Center),
+                format!(
+                    "{} vs {}",
+                    &function_id_old_color_str, &function_id_new_color_str
+                )
+                .cell()
+                .justify(Justify::Center)
+                .align(Align::Center),
             );
-
             rows.push(
                 format!("{} vs {}", &benchmark_old_mean_str, &benchmark_new_mean_str)
                     .cell()
                     .justify(Justify::Center)
                     .align(Align::Center),
             );
-
             rows.push(
                 format!(
                     "{} [{:+.2},{:+.2}] {} CI (p = {:.12} {} {:.3})",
@@ -1371,138 +1398,14 @@ impl Report for CliReportIntraGroup {
                 .justify(Justify::Center)
                 .align(Align::Center),
             );
-            // rows.push(
-            //     format!(
-            //         "{} ({}) [{},{}] {} CI (p = {:.12} {} {:.3})",
-            //         &mean_diff,
-            //         &mean_diff_pct_str,
-            //         self.faint(format::change(
-            //             mean_diff_est.confidence_interval.lower_bound,
-            //             true
-            //         )),
-            //         self.faint(format::change(
-            //             mean_diff_est.confidence_interval.upper_bound,
-            //             true
-            //         )),
-            //         format::change(mean_diff_est.confidence_interval.confidence_level, false),
-            //         &comparison.comp.p_value,
-            //         if is_mean_different { "<" } else { ">" },
-            //         &comparison.comp.significance_threshold
-            //     )
-            //     .cell()
-            //     .justify(Justify::Center)
-            //     .align(Align::Center),
-            // );
-
             rows.push(
                 explanation_str
                     .cell()
                     .justify(Justify::Center)
                     .align(Align::Center),
             );
-            // rows.push(
-            //     format!(
-            //         "change: [{} {} {}] (p = {:.12} {} {:.3}) - {}",
-            //         self.faint(format::change(
-            //             mean_est.confidence_interval.lower_bound,
-            //             true
-            //         )),
-            //         point_estimate_str,
-            //         self.faint(format::change(
-            //             mean_est.confidence_interval.upper_bound,
-            //             true
-            //         )),
-            //         &comparison.comp.p_value,
-            //         if different_mean { "<" } else { ">" },
-            //         &comparison.comp.significance_threshold,
-            //         &explanation_str
-            //     )
-            //     .cell()
-            //     .justify(Justify::Center)
-            //     .align(Align::Center),
-            // );
-
             data.push(rows);
-
-            //
-            // eprintln!(
-            //     "{}change: [{} {} {}] (p = {:.7} {} {:.7})",
-            //     " ".repeat(24),
-            //     self.faint(format::change(
-            //         mean_est.confidence_interval.lower_bound,
-            //         true
-            //     )),
-            //     point_estimate_str,
-            //     self.faint(format::change(
-            //         mean_est.confidence_interval.upper_bound,
-            //         true
-            //     )),
-            //     comp.p_value,
-            //     if different_mean { "<" } else { ">" },
-            //     comp.significance_threshold
-            // );
-
-            // eprintln!("{}{}", " ".repeat(24), explanation_str);
-
-            // let data_table = vec![
-            //     vec![
-            //         "LongUnixPath/fast vs LongUnixPath/original"
-            //             .cell()
-            //             .justify(Justify::Center)
-            //             .align(Align::Center),
-            //         "change: [-2.8726% -1.7517% -0.4655%] (p = 0.00 < 0.00)"
-            //             .cell()
-            //             .justify(Justify::Center)
-            //             .align(Align::Center),
-            //     ],
-            //     vec![
-            //         "RelativeToCwd/fast vs RelativeToCwd/original"
-            //             .cell()
-            //             .justify(Justify::Center)
-            //             .align(Align::Center)
-            //             .foreground_color(Some(Color::Red)),
-            //         "change: [+159.86% +161.15% +162.70%] (p = 0.00 < 0.00)"
-            //             .cell()
-            //             .justify(Justify::Center)
-            //             .align(Align::Center)
-            //             .foreground_color(Some(Color::Red)),
-            //     ],
-            // ];
-            // .table()
-            // .title(vec![
-            //     "Benchmarks"
-            //         .cell()
-            //         .justify(Justify::Center)
-            //         .align(Align::Center)
-            //         .bold(true),
-            //     "Latency (means)"
-            //         .cell()
-            //         .justify(Justify::Center)
-            //         .align(Align::Center)
-            //         .bold(true),
-            // ])
-            // .separator(
-            //     Separator::builder()
-            //         .row(Some(HorizontalLine::new('├', '┤', '┼', '─')))
-            //         .title(Some(HorizontalLine::new('├', '┤', '┼', '─')))
-            //         .column(Some(VerticalLine::new('│')))
-            //         .build(),
-            // )
-            // .border(
-            //     Border::builder()
-            //         // .top(HorizontalLine::new('╭', '╮', '┬', '─'))
-            //         .top(HorizontalLine::new('┌', '┐', '┬', '─'))
-            //         // .bottom(HorizontalLine::new('╰', '╯', '┴', '─'))
-            //         .bottom(HorizontalLine::new('└', '┘', '┴', '─'))
-            //         .left(VerticalLine::new('│'))
-            //         .right(VerticalLine::new('│'))
-            //         .build(),
-            // )
-            // .bold(true);
-
-            // let _ = print_stderr(data_table);
         }
-        // let kk = data.into_iter().flatten();
         let data_table = data
             .table()
             .title(vec![
@@ -1511,12 +1414,12 @@ impl Report for CliReportIntraGroup {
                     .justify(Justify::Center)
                     .align(Align::Center)
                     .bold(true),
-                "Latency (means)"
+                "Latency (mean)"
                     .cell()
                     .justify(Justify::Center)
                     .align(Align::Center)
                     .bold(true),
-                "Latency Change (means)"
+                "Latency Change (mean)"
                     .cell()
                     .justify(Justify::Center)
                     .align(Align::Center)
@@ -1547,6 +1450,10 @@ impl Report for CliReportIntraGroup {
             .bold(true);
 
         let _ = print_stderr(data_table);
+
+        for r in comparison_report_results {
+            eprintln!("{r:?}");
+        }
     }
 }
 
