@@ -1,3 +1,42 @@
+use std::fmt::Write;
+
+#[inline]
+pub fn p_value(a: f64) -> String {
+    if a < 0.001 {
+        if a < 0.000_001 {
+            format!("{a:.3}")
+        } else {
+            format!("{a:.6}")
+        }
+    } else {
+        format!("{a:.3}")
+    }
+}
+
+/// Format `pct` ∈ [0,1] as a percent string.
+/// Examples: 0.12 -> "12", 0.12345 -> "12.345".
+#[inline]
+pub fn fmt_percent(pct: f64) -> String {
+    //  pct * 100_000 gives us “thousandths of a percent”.
+    #[allow(clippy::cast_possible_truncation)]
+    let scaled = (pct * 100_000.0).round() as i64; // 0‥=100_000
+
+    // Integer part and the 3-digit fractional part.
+    let whole = scaled / 1000; //  12_345 -> 12
+
+    #[allow(clippy::cast_sign_loss)]
+    let frac = (scaled % 1000) as u16; //  12_345 -> 345  (always 0‥999)
+
+    if frac == 0 {
+        whole.to_string() // no dtoa, one small allocation
+    } else {
+        // Fractional path: still no dtoa, only integer formatting.
+        let mut s = String::with_capacity(8); // worst case “100.000”
+        write!(&mut s, "{whole}.{frac:03}").unwrap();
+        s
+    }
+}
+
 pub fn change(pct: f64, signed: bool) -> String {
     if signed {
         format!("{:>+6}%", signed_short(pct * 1e2))
@@ -100,5 +139,15 @@ mod test {
             assert!(string.len() <= 7);
             float *= 2.0;
         }
+    }
+
+    #[test]
+    fn hand_picked_cases() {
+        assert_eq!(fmt_percent(0.0), "0");
+        assert_eq!(fmt_percent(0.10), "10");
+        assert_eq!(fmt_percent(0.12345), "12.345");
+        assert_eq!(fmt_percent(0.995), "99.500");
+        assert_eq!(fmt_percent(0.99999), "99.999");
+        assert_eq!(fmt_percent(1.0), "100");
     }
 }

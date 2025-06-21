@@ -19,7 +19,6 @@ use std::fmt;
 use std::io::stderr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use union_find::{QuickUnionUf, UnionByRank, UnionFind};
 
 const MAX_DIRECTORY_NAME_LEN: usize = 64;
 const MAX_TITLE_LEN: usize = 100;
@@ -34,10 +33,11 @@ pub struct ComparisonReport<'a> {
 
 #[derive(Debug)]
 pub enum ComparisonReportRankingResult {
-    Improved,
-    Regressed,
-    NonSignificant,
-    // NoChange,
+    Improved,                // +2 score for new, -2 score for old
+    Regressed,               // +2 score for old, -2 score for new
+    NonSignificantImproved,  // +1 score for new, -1 score for old
+    NonSignificantRegressed, // +1 score for old, -1 score for new
+    NoChange,                //  0 score
 }
 
 #[derive(Debug)]
@@ -47,290 +47,149 @@ pub struct ComparisonReportRanking {
     pub result: ComparisonReportRankingResult,
 }
 
-/// A simple Disjoint Set Union (DSU) data structure.
-/// It uses path compression and union by rank (implicitly by map structure) for efficiency.
-struct DisjointSet<'a> {
-    parent: HashMap<&'a str, &'a str>,
+/// Fast-to-slow ranking plus scores.
+#[derive(Debug)]
+pub struct RankingResult {
+    /// Vector of ranking tiers (fastest → slowest).
+    /// Each inner `Vec<String>` holds all function IDs that are tied.
+    pub ranks: Vec<Vec<String>>,
+
+    /// Score – identical for every member of the same tier.
+    pub scores: HashMap<String, i32>,
 }
 
-impl<'a> DisjointSet<'a> {
-    /// Creates a new DSU where each item is its own parent initially.
-    fn new(items: impl IntoIterator<Item = &'a str>) -> Self {
-        let parent = items.into_iter().map(|item| (item, item)).collect();
-        DisjointSet { parent }
-    }
-
-    /// Finds the representative of the set containing `item`.
-    /// Implements path compression for optimization.
-    fn find(&mut self, item: &'a str) -> &'a str {
-        let parent = self.parent.get(item).unwrap();
-        if parent == &item {
-            return item;
-        }
-        let representative = self.find(parent);
-        self.parent.insert(item, representative);
-        representative
-    }
-
-    /// Merges the sets containing `item1` and `item2`.
-    fn union(&mut self, item1: &'a str, item2: &'a str) {
-        let root1 = self.find(item1);
-        let root2 = self.find(item2);
-        if root1 != root2 {
-            self.parent.insert(root1, root2);
-        }
-    }
-}
-
-/// Ranks function IDs based on a series of comparison reports.
+/// Score-based ranking WITHOUT equivalence classes.
 ///
-/// The ranking is determined by performing a topological sort on a graph of the functions.
-/// Tied functions (`NonSignificant``) are grouped together at the same rank.
+/// • Every function keeps its own score; `NoChange` contributes 0.
+/// • Functions are ranked by that score (descending).
+/// • If two or more functions end up with the *exact* same score
+///   they share a tier, because the score alone cannot order them.
 ///
-/// # Returns
-/// A `Result` containing either:
-/// - `Ok(Vec<Vec<String>>)`: A list of rank groups, ordered from fastest to slowest.
-///   Each inner vector contains function IDs that are tied in performance.
-/// - `Err(String)`: An error message if the reports are contradictory (contain a cycle).
-pub fn rank_functions(reports: &[ComparisonReportRanking]) -> Result<Vec<Vec<String>>, String> {
-    // --- 1. Collect all unique function IDs ---
-    // This HashSet owns all the strings, allowing us to use &str slices
-    // in subsequent data structures to avoid cloning strings repeatedly.
-    let mut unique_ids = HashSet::new();
-    for report in reports {
-        unique_ids.insert(report.function_id_new.clone());
-        unique_ids.insert(report.function_id_old.clone());
-    }
-    let unique_ids_refs: HashSet<&str> = unique_ids.iter().map(AsRef::as_ref).collect();
-
-    // --- 2. Group tied functions using DSU ---
-    let mut dsu = DisjointSet::new(unique_ids_refs.iter().copied());
-    for report in reports {
-        if let ComparisonReportRankingResult::NonSignificant = report.result {
-            dsu.union(&report.function_id_new, &report.function_id_old);
-        }
-    }
-
-    // --- 3. Build the graph of equivalence classes (rank groups) ---
-    let mut adj: HashMap<&str, HashSet<&str>> = HashMap::new();
-    let mut in_degree: HashMap<&str, usize> = HashMap::new();
-
-    // Initialize graph nodes (representatives of each set)
-    for &id in &unique_ids_refs {
-        let root = dsu.find(id);
-        adj.entry(root).or_default();
-        in_degree.entry(root).or_insert(0);
-    }
-
-    for report in reports {
-        let rep_new = dsu.find(&report.function_id_new);
-        let rep_old = dsu.find(&report.function_id_old);
-
-        // Only add edges between different sets
-        if rep_new == rep_old {
-            continue;
-        }
-
-        // An edge `u -> v` means `u` is faster than `v`.
-        let (faster, slower) = match report.result {
-            ComparisonReportRankingResult::Improved => (rep_new, rep_old),
-            ComparisonReportRankingResult::Regressed => (rep_old, rep_new),
-            ComparisonReportRankingResult::NonSignificant => continue,
-        };
-
-        if adj.entry(faster).or_default().insert(slower) {
-            *in_degree.entry(slower).or_insert(0) += 1;
-        }
-    }
-
-    // --- 4. Perform Topological Sort (Kahn's Algorithm) ---
-    let mut queue: VecDeque<&str> = in_degree
-        .iter()
-        .filter_map(|(&id, &deg)| if deg == 0 { Some(id) } else { None })
-        .collect();
-
-    let mut sorted_reps = Vec::new();
-    while let Some(u) = queue.pop_front() {
-        sorted_reps.push(u);
-        // We must clone the neighbors to avoid borrowing issues with `in_degree`.
-        let neighbors = adj.get(u).cloned().unwrap_or_default();
-        for v in neighbors {
-            if let Some(degree) = in_degree.get_mut(v) {
-                *degree -= 1;
-                if *degree == 0 {
-                    queue.push_back(v);
-                }
-            }
-        }
-    }
-
-    // --- 5. Check for cycles and format the output ---
-    if sorted_reps.len() != adj.len() {
-        return Err(
-            "Contradictory reports found (cycle detected in performance graph)".to_string(),
-        );
-    }
-
-    // Group all functions by their representative to form the final ranked list.
-    let mut groups: HashMap<&str, Vec<String>> = HashMap::new();
-    for id in &unique_ids {
-        let root = dsu.find(id);
-        groups.entry(root).or_default().push(id.clone());
-    }
-
-    let final_ranking = sorted_reps
-        .into_iter()
-        .map(|rep| {
-            let mut group = groups.remove(rep).unwrap_or_default();
-            group.sort(); // Sort within ties for deterministic output
-            group
-        })
-        .collect();
-
-    Ok(final_ranking)
-}
-
-/// Pretty-prints the result of a function ranking.
+/// Complexity
+///   n = #reports, m = #distinct function IDs
+///   • scoring loop            : O(n)
+///   • sort by score           : O(m log m)  (dominant)
+///   • total memory            : O(m)
 ///
-/// # Arguments
-/// * `title` - A title for the report to provide context.
-/// * `ranking_result` - The result from the `rank_functions` call.
-pub fn pretty_print_ranking(title: &str, ranking_result: &Result<Vec<Vec<String>>, String>) {
-    eprintln!("--- {} ---", title);
-
-    match ranking_result {
-        // The ranking was successful
-        Ok(ranking) => {
-            if ranking.is_empty() {
-                eprintln!("No functions were provided to rank.");
-                eprintln!("-------------------------------------------------");
-                return;
-            }
-
-            eprintln!("Performance Ranking (Fastest to Slowest)");
-            eprintln!("----------------------------------------");
-
-            for (i, rank_group) in ranking.iter().enumerate() {
-                let rank = i + 1; // Use 1-based ranking for display
-
-                // Add a newline for spacing between ranks, but not before the first one
-                if i > 0 {
-                    eprintln!();
-                }
-
-                // Check if this rank is a tie
-                if rank_group.len() > 1 {
-                    eprintln!("Rank {}: (Tied)", rank);
-                } else {
-                    eprintln!("Rank {}:", rank);
-                }
-
-                // Print each function ID in the group, indented for clarity
-                for function_id in rank_group {
-                    eprintln!("  - {}", function_id);
-                }
-            }
-            eprintln!("-------------------------------------------------");
-        }
-        // An error occurred (e.g., a cycle was detected)
-        Err(error_message) => {
-            eprintln!("\n[ERROR] Could not generate ranking:");
-            eprintln!("  Reason: {}", error_message);
-            eprintln!("-------------------------------------------------");
-        }
-    }
-    eprintln!(); // Add a final newline for spacing
-}
-
-// Rank fastest → slowest, returning groups of ties
-pub fn rank_fastest(reports: &[ComparisonReportRanking]) -> Vec<Vec<String>> {
-    // 0. Map every seen function-ID to a contiguous index
-    let mut id_to_idx: HashMap<String, usize> = HashMap::new();
+/// All data structures are pre-allocated where possible; the function
+/// uses only safe Rust and does not perform unnecessary cloning.
+pub fn rank_fastest_with_scores(reports: &[ComparisonReportRanking]) -> RankingResult {
+    // ──────────────────────────────────────────────────────────────
+    // 0. Map every unique function ID → dense index 0‥m-1
+    let mut id_to_idx: HashMap<String, usize> = HashMap::with_capacity(reports.len() * 2); // rough upper bound
     let mut next_idx = 0usize;
 
-    let mut intern = |id: &String, map: &mut HashMap<String, usize>, counter: &mut usize| {
-        map.entry(id.clone()).or_insert_with(|| {
-            let i = *counter;
-            *counter += 1;
-            i
-        });
-    };
-
     for r in reports {
-        intern(&r.function_id_new, &mut id_to_idx, &mut next_idx);
-        intern(&r.function_id_old, &mut id_to_idx, &mut next_idx);
+        // new side
+        id_to_idx
+            .entry(r.function_id_new.clone())
+            .or_insert_with(|| {
+                let idx = next_idx;
+                next_idx += 1;
+                idx
+            });
+        // old side
+        id_to_idx
+            .entry(r.function_id_old.clone())
+            .or_insert_with(|| {
+                let idx = next_idx;
+                next_idx += 1;
+                idx
+            });
     }
 
-    // 1. Union-Find for ties (NonSignificant)
-    let mut uf = QuickUnionUf::<UnionByRank>::new(next_idx);
-    // let mut uf: QuickUnionUf<UnionByRank> = QuickUnionUf::new(next_idx);
-    for r in reports {
-        if matches!(r.result, ComparisonReportRankingResult::NonSignificant) {
-            let a = id_to_idx[&r.function_id_new];
-            let b = id_to_idx[&r.function_id_old];
-            uf.union(a, b); // returns bool ↔ did_merge, we don't need it
-        }
-    }
-
-    // 2. Individual win/lose scores
+    // ──────────────────────────────────────────────────────────────
+    // 1. Per-ID score vector
     let mut score = vec![0i32; next_idx];
+
     for r in reports {
-        let (a, b) = (id_to_idx[&r.function_id_new], id_to_idx[&r.function_id_old]);
+        let a = id_to_idx[&r.function_id_new];
+        let b = id_to_idx[&r.function_id_old];
         match r.result {
             ComparisonReportRankingResult::Improved => {
+                // +2 score for new, -2 score for old
+                score[a] += 2;
+                score[b] -= 2;
+            }
+            ComparisonReportRankingResult::Regressed => {
+                // +2 score for old, -2 score for new
+                score[a] -= 2;
+                score[b] += 2;
+            }
+            ComparisonReportRankingResult::NonSignificantImproved => {
+                // +1 score for new, -1 score for old
                 score[a] += 1;
                 score[b] -= 1;
             }
-            ComparisonReportRankingResult::Regressed => {
+            ComparisonReportRankingResult::NonSignificantRegressed => {
+                // +1 score for old, -1 score for new
                 score[a] -= 1;
                 score[b] += 1;
             }
-            ComparisonReportRankingResult::NonSignificant => {} // tie ⇒ no score change
+            ComparisonReportRankingResult::NoChange => { /* 0 pts */ }
         }
     }
 
-    // 3. Aggregate scores per equivalence class (Union-Find root)
-    let mut class_score: HashMap<usize, i32> = HashMap::new();
-    for idx in 0..next_idx {
-        let root = uf.find(idx);
-        *class_score.entry(root).or_default() += score[idx];
-    }
-
-    // 4. Collect members per class
-    let mut class_members: HashMap<usize, Vec<String>> = HashMap::new();
+    // ──────────────────────────────────────────────────────────────
+    // 2. Build score maps
+    let mut id_to_score: HashMap<String, i32> = HashMap::with_capacity(id_to_idx.len());
     for (id, &idx) in &id_to_idx {
-        let root = uf.find(idx);
-        class_members.entry(root).or_default().push(id.clone());
+        id_to_score.insert(id.clone(), score[idx]);
     }
 
-    // 5. Sort classes by score (descending) and return member lists
-    let mut ranked: Vec<(i32, Vec<String>)> = class_members
-        .into_iter()
-        .map(|(root, members)| (class_score[&root], members))
-        .collect();
+    // ──────────────────────────────────────────────────────────────
+    // 3. Sort by score (descending) and group ties
+    let mut entries: Vec<(String, i32)> =
+        id_to_score.iter().map(|(id, &s)| (id.clone(), s)).collect();
 
-    ranked.sort_by(|a, b| b.0.cmp(&a.0)); // highest score first
-    ranked.into_iter().map(|(_, v)| v).collect()
+    entries.sort_unstable_by(|a, b| {
+        let ord = b.1.cmp(&a.1); // score DESC
+        if ord == std::cmp::Ordering::Equal {
+            a.0.cmp(&b.0) // name ASC (stable tie-break)
+        } else {
+            ord
+        }
+    });
+
+    let mut ranks: Vec<Vec<String>> = Vec::new();
+    for (id, s) in entries {
+        if ranks
+            .last()
+            .is_none_or(|g: &Vec<String>| id_to_score[&g[0]] != s)
+        {
+            ranks.push(vec![id]); // new tier
+        } else {
+            ranks.last_mut().unwrap().push(id); // same tier
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    RankingResult {
+        ranks,
+        scores: id_to_score,
+    }
 }
 
-pub fn pretty_print_ranking2(ranking: &[Vec<String>]) {
-    if ranking.is_empty() {
+pub fn pretty_print_ranking_with_scores(res: &RankingResult) {
+    if res.ranks.is_empty() {
         eprintln!("(no data)");
         return;
     }
-
-    let pad = ranking.len().to_string().len(); // width for rank numbers
-    for (idx, group) in ranking.iter().enumerate() {
-        // idx + 1  → human-friendly rank starting at 1
+    let pad = res.ranks.len().to_string().len();
+    for (idx, group) in res.ranks.iter().enumerate() {
+        let label = match idx {
+            0 => " (fastest)",
+            i if i + 1 == res.ranks.len() => " (slowest)",
+            _ => "",
+        };
+        // scores are identical inside one group, so pick the first
+        let s = &res.scores[&group[0]];
         eprintln!(
-            " #{:>pad$}  {}{}",
+            " #{:>pad$}  {: <8}  {}{}",
             idx + 1,
+            format!("score={}", s),
             group.join(", "),
-            match idx {
-                0 => "          (fastest)",
-                i if i + 1 == ranking.len() => "          (slowest)",
-                _ => "",
-            },
+            label,
             pad = pad
         );
     }
@@ -1591,10 +1450,6 @@ impl Report for CliReportIntraGroup {
             let explanation_str: String;
 
             let mut mean_diff = format!("{:+.2} ns", mean_diff_point_estimate * benchmark_old_mean);
-            // let mut function_id_old_color_str =
-            // comparison.id_old.function_id.as_ref().unwrap().to_owned();
-            // let mut function_id_new_color_str =
-            // comparison.id_new.function_id.as_ref().unwrap().to_owned();
             let mut function_id_old_color_str = function_id_old_str.clone();
             let mut function_id_new_color_str = function_id_new_str.clone();
             let mut benchmark_old_mean_str = formatter.format_value(benchmark_old_mean);
@@ -1612,7 +1467,7 @@ impl Report for CliReportIntraGroup {
                         function_id_old_color_str = self.red(function_id_old_color_str);
                         explanation_str = format!(
                             "Performance has {}",
-                            self.green(format!("improved {mean_diff_pct_str}"))
+                            self.green(self.bold(format!("improved {mean_diff_pct_str}")))
                         );
                         comparison_report_results.push(ComparisonReportRanking {
                             function_id_new: function_id_new_str,
@@ -1629,7 +1484,7 @@ impl Report for CliReportIntraGroup {
                             self.green(self.bold(function_id_old_color_str));
                         explanation_str = format!(
                             "Performance has {}",
-                            self.red(format!("regressed {mean_diff_pct_str}"))
+                            self.red(self.bold(format!("regressed {mean_diff_pct_str}")))
                         );
                         comparison_report_results.push(ComparisonReportRanking {
                             function_id_new: function_id_new_str,
@@ -1638,14 +1493,36 @@ impl Report for CliReportIntraGroup {
                         });
                     }
                     ComparisonResult::NonSignificant => {
-                        explanation_str = format!(
-                            "Changed {mean_diff_pct_str} within noise threshold of {noise_threshold:.2} ns",
-                        );
-                        comparison_report_results.push(ComparisonReportRanking {
-                            function_id_new: function_id_new_str,
-                            function_id_old: function_id_old_str,
-                            result: ComparisonReportRankingResult::NonSignificant,
-                        });
+                        mean_diff = self.faint(self.bold(mean_diff));
+                        if mean_diff_point_estimate < 0.0 {
+                            benchmark_new_mean_str = self.faint(self.bold(benchmark_new_mean_str));
+                            function_id_new_color_str =
+                                self.faint(self.bold(function_id_new_color_str));
+                            explanation_str = format!(
+                                "Improved {} within noise threshold of ±{:.2}%",
+                                self.faint(self.bold(mean_diff_pct_str)),
+                                noise_threshold * 1e2
+                            );
+                            comparison_report_results.push(ComparisonReportRanking {
+                                function_id_new: function_id_new_str,
+                                function_id_old: function_id_old_str,
+                                result: ComparisonReportRankingResult::NonSignificantImproved,
+                            });
+                        } else {
+                            benchmark_old_mean_str = self.faint(self.bold(benchmark_old_mean_str));
+                            function_id_old_color_str =
+                                self.faint(self.bold(function_id_old_color_str));
+                            explanation_str = format!(
+                                "Regressed {} within noise threshold of ±{:.2}%",
+                                self.faint(self.bold(mean_diff_pct_str)),
+                                noise_threshold * 1e2
+                            );
+                            comparison_report_results.push(ComparisonReportRanking {
+                                function_id_new: function_id_new_str,
+                                function_id_old: function_id_old_str,
+                                result: ComparisonReportRankingResult::NonSignificantRegressed,
+                            });
+                        }
                     }
                 }
             } else {
@@ -1653,8 +1530,7 @@ impl Report for CliReportIntraGroup {
                 comparison_report_results.push(ComparisonReportRanking {
                     function_id_new: function_id_new_str,
                     function_id_old: function_id_old_str,
-                    // result: ComparisonReportResult::NoChange,
-                    result: ComparisonReportRankingResult::NonSignificant,
+                    result: ComparisonReportRankingResult::NoChange,
                 });
             }
 
@@ -1675,12 +1551,13 @@ impl Report for CliReportIntraGroup {
             );
             rows.push(
                 format!(
-                    "{} [{:+.2},{:+.2}] {} CI (p = {:.12} {} {:.3})",
+                    "{} [{:+.2},{:+.2}] {:.3}% CI (p = {} {} {:.3})",
                     &mean_diff,
                     mean_diff_ci_lower_bound,
                     mean_diff_ci_upper_bound,
-                    format::change(mean_diff_est.confidence_interval.confidence_level, false),
-                    &comparison.comp.p_value,
+                    format::fmt_percent(mean_diff_est.confidence_interval.confidence_level),
+                    // &comparison.comp.p_value,
+                    format::p_value(comparison.comp.p_value),
                     if is_mean_different { "<" } else { ">" },
                     &comparison.comp.significance_threshold
                 )
@@ -1741,12 +1618,16 @@ impl Report for CliReportIntraGroup {
 
         let _ = print_stderr(data_table);
 
-        let ranking1 = rank_functions(&comparison_report_results);
-        pretty_print_ranking("ranking1", &ranking1);
+        // let ranking1 = rank_functions(&comparison_report_results);
+        // pretty_print_ranking("ranking1", &ranking1);
 
-        let ranking2 = rank_fastest(&comparison_report_results);
+        // let ranking2 = rank_fastest(&comparison_report_results);
+        // pretty_print_ranking2(&ranking2);
 
-        pretty_print_ranking2(&ranking2);
+        let ranking = rank_fastest_with_scores(&comparison_report_results);
+        eprintln!("ranking: {ranking:?}");
+        pretty_print_ranking_with_scores(&ranking);
+
         // for r in comparison_report_results {
         //     eprintln!("{r:?}");
         // }

@@ -36,7 +36,6 @@ serde_json      = "1.0"
 simplelog       = "0.12.2"
 tinytemplate    = "1.1"
 toml            = { version = "0.5", features = ["preserve_order"] }
-union-find      = "0.4.3"
 walkdir         = "2.3"
 
 [dependencies.plotters]
