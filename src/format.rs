@@ -1,39 +1,68 @@
 use std::fmt::Write;
+use std::hash::{Hash, Hasher};
 
-#[inline]
-pub fn p_value(a: f64) -> String {
-    if a < 0.001 {
-        if a < 0.000_001 {
-            format!("{a:.3}")
-        } else {
-            format!("{a:.6}")
-        }
-    } else {
-        format!("{a:.3}")
+// A wrapper around f64 that can be used as a key in a HashMap/HashSet.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct FloatKey(pub f64);
+
+impl Eq for FloatKey {}
+
+impl Hash for FloatKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.to_bits().hash(state);
     }
 }
 
-/// Format `pct` ∈ [0,1] as a percent string.
-/// Examples: 0.12 -> "12", 0.12345 -> "12.345".
+const POW10: [f64; 16] = [
+    1.0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15,
+];
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 #[inline]
-pub fn fmt_percent(pct: f64) -> String {
-    //  pct * 100_000 gives us “thousandths of a percent”.
-    #[allow(clippy::cast_possible_truncation)]
-    let scaled = (pct * 100_000.0).round() as i64; // 0‥=100_000
+fn pow10(exp: usize) -> f64 {
+    POW10
+        .get(exp)
+        .copied()
+        .unwrap_or_else(|| 10f64.powi(exp as i32))
+}
 
-    // Integer part and the 3-digit fractional part.
-    let whole = scaled / 1000; //  12_345 -> 12
+pub struct PValueFormatter {
+    short_precision: usize,
+    long_precision: usize,
+    p_value: f64,
+    lower_bound: f64,
+}
 
-    #[allow(clippy::cast_sign_loss)]
-    let frac = (scaled % 1000) as u16; //  12_345 -> 345  (always 0‥999)
+impl PValueFormatter {
+    /// O(1) initialisation, performs all heavy math once.
+    pub fn new(p_value: f64) -> Self {
+        assert!(
+            p_value.is_sign_positive() && p_value.is_finite(),
+            "p-value must be positive and finite"
+        );
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let dec = (-p_value.log10()).ceil().max(0.0) as usize;
+        let lb = p_value / pow10(dec);
+        Self {
+            short_precision: dec,
+            long_precision: dec * 2,
+            p_value,
+            lower_bound: lb,
+        }
+    }
 
-    if frac == 0 {
-        whole.to_string() // no dtoa, one small allocation
-    } else {
-        // Fractional path: still no dtoa, only integer formatting.
-        let mut s = String::with_capacity(8); // worst case “100.000”
-        write!(&mut s, "{whole}.{frac:03}").unwrap();
-        s
+    /// Format a single `a`.
+    /// O(d) where d is the number of output digits.
+    pub fn fmt(&self, a: f64) -> String {
+        let use_long = (a < self.p_value) & (a >= self.lower_bound);
+        let prec = if use_long {
+            self.long_precision
+        } else {
+            self.short_precision
+        };
+        let mut buf = String::with_capacity(32);
+        write!(&mut buf, "{a:.prec$}").unwrap();
+        buf
     }
 }
 
@@ -141,13 +170,114 @@ mod test {
         }
     }
 
+    /// For readability we store examples and expected strings side-by-side.
+    fn check_cases(p_val: f64, cases: &[(f64, &str)]) {
+        let fmt = PValueFormatter::new(p_val);
+        for &(a, expected) in cases {
+            assert_eq!(
+                fmt.fmt(a),
+                expected,
+                "p_value={p_val}, a={a} should format to `{expected}`"
+            );
+        }
+    }
+
+    // ---------- canonical examples -------------------------------------
     #[test]
-    fn hand_picked_cases() {
-        assert_eq!(fmt_percent(0.0), "0");
-        assert_eq!(fmt_percent(0.10), "10");
-        assert_eq!(fmt_percent(0.12345), "12.345");
-        assert_eq!(fmt_percent(0.995), "99.500");
-        assert_eq!(fmt_percent(0.99999), "99.999");
-        assert_eq!(fmt_percent(1.0), "100");
+    fn matches_original_example_output() {
+        /* Examples copied from the original snippet
+           --------------------------------------------------------------
+           Expected strings were produced by the reference programme
+           and hand-verified.
+        */
+        const CASES: &[(f64, &str)] = &[
+            (0.000_000_1, "0.000"),
+            (0.000_000_123, "0.000"),
+            (0.000_001_23, "0.000001"),
+            (0.000_002_23, "0.000002"),
+            (0.000_001, "0.000001"),
+            (0.000_000_23, "0.000"),
+            (0.000_012_3, "0.000012"),
+            (0.4723, "0.472"),
+            (0.000_001, "0.000001"),
+        ];
+        check_cases(0.001, CASES);
+    }
+
+    // ---------- boundary conditions ------------------------------------
+    #[test]
+    fn lower_bound_gets_long_precision() {
+        // lower_bound = p / 10^decimals
+        let p = 0.001_f64;
+        let lb = 0.000_001_f64; // manually computed
+        let fmt = PValueFormatter::new(p);
+
+        // long precision is 6 ⇒ we expect 6 decimals
+        assert_eq!(fmt.fmt(lb), "0.000001");
+    }
+
+    #[test]
+    fn equal_to_p_value_gets_short_precision() {
+        let p = 0.001_f64;
+        let fmt = PValueFormatter::new(p);
+
+        // short precision is 3 ⇒ "0.001"
+        assert_eq!(fmt.fmt(p), "0.001");
+    }
+
+    #[test]
+    fn above_p_value_gets_short_precision() {
+        let p = 0.001_f64;
+        let fmt = PValueFormatter::new(p);
+
+        // short precision = 3
+        assert_eq!(fmt.fmt(0.10), "0.100");
+    }
+
+    // ---------- negative / unusual 'a' --------------------------------
+    #[test]
+    fn negative_a_is_supported() {
+        let p = 0.001_f64;
+        let fmt = PValueFormatter::new(p);
+
+        // a < lower_bound ⇒ short precision (3)
+        assert_eq!(fmt.fmt(-0.0005), "-0.001");
+    }
+
+    // ---------- constructor validity checks ---------------------------
+    #[test]
+    #[should_panic(expected = "p-value must be positive")]
+    fn new_panics_on_non_positive_p() {
+        let _ = PValueFormatter::new(0.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "p-value must be positive")]
+    fn new_panics_on_negative_p() {
+        let _ = PValueFormatter::new(-1.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "p-value must be positive")]
+    fn new_panics_on_nan() {
+        let _ = PValueFormatter::new(f64::NAN);
+    }
+
+    #[test]
+    #[should_panic(expected = "p-value must be positive")]
+    fn new_panics_on_infinite() {
+        let _ = PValueFormatter::new(f64::INFINITY);
+    }
+
+    // ---------- repeated-use correctness & amortisation ---------------
+    #[test]
+    fn repeated_calls_yield_identical_results() {
+        let fmt = PValueFormatter::new(1e-5);
+        let inputs = [2.3e-7, 5.0e-6, 0.15, 2.3e-7];
+        // Capture once
+        let first_pass: Vec<String> = inputs.iter().map(|&a| fmt.fmt(a)).collect();
+        // Second pass must match
+        let second_pass: Vec<String> = inputs.iter().map(|&a| fmt.fmt(a)).collect();
+        assert_eq!(first_pass, second_pass);
     }
 }

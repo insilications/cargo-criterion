@@ -14,7 +14,7 @@ use cli_table::{
 };
 use std::cell::Cell;
 use std::cmp;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::io::stderr;
 use std::io::Write;
@@ -56,6 +56,54 @@ pub struct RankingResult {
 
     /// Score – identical for every member of the same tier.
     pub scores: HashMap<String, i32>,
+}
+
+impl fmt::Display for RankingResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // 1. Handle the edge case of no data.
+        if self.ranks.is_empty() {
+            // Write directly to the formatter.
+            return write!(f, "(no data)");
+        }
+
+        // 2. Pre-calculate values needed for formatting.
+        let num_ranks = self.ranks.len();
+        let pad = num_ranks.to_string().len(); // Padding for rank number alignment.
+        let mut lines = Vec::with_capacity(num_ranks);
+
+        // 3. Iterate through ranks to build each line of the output.
+        for (idx, group) in self.ranks.iter().enumerate() {
+            // Determine the label for the fastest and slowest groups.
+            let label = match idx {
+                0 => " (fastest)",
+                i if i + 1 == num_ranks => " (slowest)",
+                _ => "",
+            };
+
+            // 4. Safely get the score.
+            // The original code `&res.scores[&group[0]]` would panic if the key
+            // is not in the map. A `Display` impl should never panic.
+            // We use `get()` which returns an `Option`, and provide a fallback.
+            let score_str = match group.get(0).and_then(|key| self.scores.get(key)) {
+                Some(s) => s.to_string(),
+                None => "N/A".to_string(), // Graceful fallback for missing scores.
+            };
+
+            // 5. Format the final line string.
+            let line = format!(
+                " #{:>pad$}  {: <8}  {}{}",
+                idx + 1,
+                format!("score={}", score_str),
+                group.join(", "),
+                label,
+                pad = pad
+            );
+            lines.push(line);
+        }
+
+        // 6. Join all lines with a newline and write to the formatter.
+        write!(f, "{}", lines.join("\n"))
+    }
 }
 
 /// Score-based ranking WITHOUT equivalence classes.
@@ -1416,12 +1464,15 @@ impl Report for CliReportIntraGroup {
 
         let mut comparison_report_results: Vec<ComparisonReportRanking> = Vec::new();
         let mut data: Vec<Vec<CellStruct>> = Vec::new();
+        let mut p_value_formatters: HashMap<format::FloatKey, format::PValueFormatter> =
+            HashMap::new();
         for comparison in comparisons {
             let mut rows: Vec<CellStruct> = Vec::new();
 
-            let is_mean_different =
-                comparison.comp.p_value < comparison.comp.significance_threshold;
-            let mean_diff_est = &comparison.comp.relative_estimates.mean;
+            let comp = &comparison.comp;
+            let significance_threshold = comp.significance_threshold;
+            let is_mean_different = comp.p_value < significance_threshold;
+            let mean_diff_est = &comp.relative_estimates.mean;
             let mean_diff_point_estimate = mean_diff_est.point_estimate;
             let benchmark_old_mean = comparison
                 .benchmark_old
@@ -1439,16 +1490,19 @@ impl Report for CliReportIntraGroup {
                 .absolute_estimates
                 .mean
                 .point_estimate;
-            let mean_diff_ci_lower_bound =
-                mean_diff_est.confidence_interval.lower_bound * benchmark_old_mean;
-            let mean_diff_ci_upper_bound =
-                mean_diff_est.confidence_interval.upper_bound * benchmark_old_mean;
-            let mean_diff_pct_str = format::change(mean_diff_point_estimate.abs(), false);
-            let noise_threshold = comparison.comp.noise_threshold;
+
+            let ci = &mean_diff_est.confidence_interval;
+            let mean_diff_ci_lower_bound = ci.lower_bound * benchmark_old_mean;
+            let mean_diff_ci_upper_bound = ci.upper_bound * benchmark_old_mean;
+            let mean_diff_pct_str = format!("{:.2}%", mean_diff_point_estimate.abs() * 1e2);
+            let noise_threshold = comp.noise_threshold;
             let function_id_old_str = comparison.id_old.function_id.as_ref().unwrap().to_owned();
             let function_id_new_str = comparison.id_new.function_id.as_ref().unwrap().to_owned();
             let explanation_str: String;
 
+            let p_value_formatter = p_value_formatters
+                .entry(format::FloatKey(comp.p_value))
+                .or_insert_with(|| format::PValueFormatter::new(significance_threshold));
             let mut mean_diff = format!("{:+.2} ns", mean_diff_point_estimate * benchmark_old_mean);
             let mut function_id_old_color_str = function_id_old_str.clone();
             let mut function_id_new_color_str = function_id_new_str.clone();
@@ -1456,8 +1510,8 @@ impl Report for CliReportIntraGroup {
             let mut benchmark_new_mean_str = formatter.format_value(benchmark_new_mean);
 
             if is_mean_different {
-                let comparison = compare_to_threshold(mean_diff_est, noise_threshold);
-                match comparison {
+                let comparison_result = compare_to_threshold(mean_diff_est, noise_threshold);
+                match comparison_result {
                     ComparisonResult::Improved => {
                         mean_diff = self.green(self.bold(mean_diff));
                         benchmark_new_mean_str = self.green(self.bold(benchmark_new_mean_str));
@@ -1551,15 +1605,14 @@ impl Report for CliReportIntraGroup {
             );
             rows.push(
                 format!(
-                    "{} [{:+.2},{:+.2}] {:.3}% CI (p = {} {} {:.3})",
+                    "{} [{:+.2},{:+.2}] {}% CI (p = {} {} {})",
                     &mean_diff,
                     mean_diff_ci_lower_bound,
                     mean_diff_ci_upper_bound,
-                    format::fmt_percent(mean_diff_est.confidence_interval.confidence_level),
-                    // &comparison.comp.p_value,
-                    format::p_value(comparison.comp.p_value),
+                    (ci.confidence_level * 1000.0) / 10.0,
+                    p_value_formatter.fmt(comp.p_value),
                     if is_mean_different { "<" } else { ">" },
-                    &comparison.comp.significance_threshold
+                    &significance_threshold
                 )
                 .cell()
                 .justify(Justify::Center)
@@ -1625,8 +1678,9 @@ impl Report for CliReportIntraGroup {
         // pretty_print_ranking2(&ranking2);
 
         let ranking = rank_fastest_with_scores(&comparison_report_results);
-        eprintln!("ranking: {ranking:?}");
-        pretty_print_ranking_with_scores(&ranking);
+        eprintln!("1 ranking: {ranking:?}");
+        eprintln!("2 ranking: {ranking}");
+        // pretty_print_ranking_with_scores(&ranking);
 
         // for r in comparison_report_results {
         //     eprintln!("{r:?}");

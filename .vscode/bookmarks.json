@@ -4,17 +4,12 @@
 			"path": "src/bench_target.rs",
 			"bookmarks": [
 				{
-					"line": 166,
-					"column": 20,
+					"line": 180,
+					"column": 24,
 					"label": ""
 				},
 				{
-					"line": 321,
-					"column": 20,
-					"label": ""
-				},
-				{
-					"line": 471,
+					"line": 400,
 					"column": 66,
 					"label": ""
 				}
@@ -24,17 +19,17 @@
 			"path": "src/report.rs",
 			"bookmarks": [
 				{
-					"line": 876,
+					"line": 924,
 					"column": 10,
 					"label": ""
 				},
 				{
-					"line": 1219,
+					"line": 1267,
 					"column": 16,
 					"label": ""
 				},
 				{
-					"line": 1407,
+					"line": 1455,
 					"column": 24,
 					"label": ""
 				}
