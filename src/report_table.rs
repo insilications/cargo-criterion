@@ -88,38 +88,38 @@ impl IntraGroupComparison {
 
     #[allow(clippy::needless_pass_by_value)]
     #[inline]
-    fn green(&self, s: String) -> String {
+    fn green(s: String) -> String {
         format!("\x1B[32m{s}\x1B[39m")
     }
 
     #[allow(clippy::needless_pass_by_value)]
     #[inline]
-    fn yellow(&self, s: String) -> String {
+    fn yellow(s: String) -> String {
         format!("\x1B[33m{s}\x1B[39m")
     }
 
     #[allow(clippy::needless_pass_by_value)]
     #[inline]
-    fn red(&self, s: String) -> String {
+    fn red(s: String) -> String {
         format!("\x1B[31m{s}\x1B[39m")
     }
 
     #[allow(clippy::needless_pass_by_value)]
     #[inline]
-    fn bold(&self, s: String) -> String {
+    fn bold(s: String) -> String {
         format!("\x1B[1m{s}\x1B[22m")
     }
 
     #[allow(clippy::needless_pass_by_value)]
     #[inline]
-    fn faint(&self, s: String) -> String {
+    fn faint(s: String) -> String {
         format!("\x1B[2m{s}\x1B[22m")
     }
 
     pub fn get_intra_group_comparison_data(&mut self, model: &Model, formatter: &ValueFormatter) {
         for (group_id, benchmark_group) in &model.groups {
-            let e = self.comparison_tables.entry(group_id.to_string());
-            if let Entry::Occupied(mut entry) = e {
+            let entry = self.comparison_tables.entry(group_id.to_string());
+            if let Entry::Vacant(e) = entry {
                 eprintln!("\nget_intra_group_comparison_data - group_id: {group_id} ");
                 let mut comparisons: Vec<ComparisonReport> = Vec::with_capacity(12);
                 for combinations in benchmark_group
@@ -177,8 +177,7 @@ impl IntraGroupComparison {
 
                 if !comparisons.is_empty() {
                     eprintln!("\nget_intra_group_comparison_data - group_id: {group_id} ");
-                    let k = self.parse_comparisons(group_id, &comparisons, formatter);
-                    entry.insert(k);
+                    e.insert(Self::parse_comparisons(group_id, &comparisons, formatter));
                 }
                 drop(comparisons);
             }
@@ -186,7 +185,6 @@ impl IntraGroupComparison {
     }
 
     fn parse_comparisons(
-        &self,
         group_id: &str,
         comparisons: &Vec<ComparisonReport>,
         formatter: &ValueFormatter,
@@ -282,15 +280,22 @@ impl IntraGroupComparison {
                 let comparison_result = compare_to_threshold(mean_diff_est, noise_threshold);
                 match comparison_result {
                     ComparisonResult::Improved => {
-                        mean_diff = self.green(self.bold(mean_diff));
-                        benchmark_new_mean_str = self.green(self.bold(benchmark_new_mean_str));
-                        benchmark_old_mean_str = self.red(benchmark_old_mean_str);
-                        function_id_new_color_str =
-                            self.green(self.bold(function_id_new_color_str));
-                        function_id_old_color_str = self.red(function_id_old_color_str);
+                        mean_diff =
+                            IntraGroupComparison::green(IntraGroupComparison::bold(mean_diff));
+                        benchmark_new_mean_str = IntraGroupComparison::green(
+                            IntraGroupComparison::bold(benchmark_new_mean_str),
+                        );
+                        benchmark_old_mean_str = IntraGroupComparison::red(benchmark_old_mean_str);
+                        function_id_new_color_str = IntraGroupComparison::green(
+                            IntraGroupComparison::bold(function_id_new_color_str),
+                        );
+                        function_id_old_color_str =
+                            IntraGroupComparison::red(function_id_old_color_str);
                         explanation_str = format!(
                             "Performance has {}",
-                            self.green(self.bold(format!("improved {mean_diff_pct_str}")))
+                            IntraGroupComparison::green(IntraGroupComparison::bold(format!(
+                                "improved {mean_diff_pct_str}"
+                            )))
                         );
                         comparison_report_results.push(ComparisonReportRanking {
                             function_id_new: function_id_new_str,
@@ -299,15 +304,21 @@ impl IntraGroupComparison {
                         });
                     }
                     ComparisonResult::Regressed => {
-                        mean_diff = self.red(mean_diff);
-                        benchmark_new_mean_str = self.red(benchmark_new_mean_str);
-                        benchmark_old_mean_str = self.green(self.bold(benchmark_old_mean_str));
-                        function_id_new_color_str = self.red(function_id_new_color_str);
-                        function_id_old_color_str =
-                            self.green(self.bold(function_id_old_color_str));
+                        mean_diff = IntraGroupComparison::red(mean_diff);
+                        benchmark_new_mean_str = IntraGroupComparison::red(benchmark_new_mean_str);
+                        benchmark_old_mean_str = IntraGroupComparison::green(
+                            IntraGroupComparison::bold(benchmark_old_mean_str),
+                        );
+                        function_id_new_color_str =
+                            IntraGroupComparison::red(function_id_new_color_str);
+                        function_id_old_color_str = IntraGroupComparison::green(
+                            IntraGroupComparison::bold(function_id_old_color_str),
+                        );
                         explanation_str = format!(
                             "Performance has {}",
-                            self.red(self.bold(format!("regressed {mean_diff_pct_str}")))
+                            IntraGroupComparison::red(IntraGroupComparison::bold(format!(
+                                "regressed {mean_diff_pct_str}"
+                            )))
                         );
                         comparison_report_results.push(ComparisonReportRanking {
                             function_id_new: function_id_new_str,
@@ -316,14 +327,20 @@ impl IntraGroupComparison {
                         });
                     }
                     ComparisonResult::NonSignificant => {
-                        mean_diff = self.faint(self.bold(mean_diff));
+                        mean_diff =
+                            IntraGroupComparison::faint(IntraGroupComparison::bold(mean_diff));
                         if mean_diff_point_estimate < 0.0 {
-                            benchmark_new_mean_str = self.faint(self.bold(benchmark_new_mean_str));
-                            function_id_new_color_str =
-                                self.faint(self.bold(function_id_new_color_str));
+                            benchmark_new_mean_str = IntraGroupComparison::faint(
+                                IntraGroupComparison::bold(benchmark_new_mean_str),
+                            );
+                            function_id_new_color_str = IntraGroupComparison::faint(
+                                IntraGroupComparison::bold(function_id_new_color_str),
+                            );
                             explanation_str = format!(
                                 "Improved {} within noise threshold of ±{:.2}%",
-                                self.faint(self.bold(mean_diff_pct_str)),
+                                IntraGroupComparison::faint(IntraGroupComparison::bold(
+                                    mean_diff_pct_str
+                                )),
                                 noise_threshold * 1e2
                             );
                             comparison_report_results.push(ComparisonReportRanking {
@@ -332,12 +349,17 @@ impl IntraGroupComparison {
                                 result: ComparisonReportRankingResult::NonSignificantImproved,
                             });
                         } else {
-                            benchmark_old_mean_str = self.faint(self.bold(benchmark_old_mean_str));
-                            function_id_old_color_str =
-                                self.faint(self.bold(function_id_old_color_str));
+                            benchmark_old_mean_str = IntraGroupComparison::faint(
+                                IntraGroupComparison::bold(benchmark_old_mean_str),
+                            );
+                            function_id_old_color_str = IntraGroupComparison::faint(
+                                IntraGroupComparison::bold(function_id_old_color_str),
+                            );
                             explanation_str = format!(
                                 "Regressed {} within noise threshold of ±{:.2}%",
-                                self.faint(self.bold(mean_diff_pct_str)),
+                                IntraGroupComparison::faint(IntraGroupComparison::bold(
+                                    mean_diff_pct_str
+                                )),
                                 noise_threshold * 1e2
                             );
                             comparison_report_results.push(ComparisonReportRanking {
