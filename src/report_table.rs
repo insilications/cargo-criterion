@@ -1,11 +1,13 @@
-use crate::estimate::ConfidenceInterval;
+use crate::estimate::{ConfidenceInterval, Estimates};
 use crate::format;
+use crate::model::{Benchmark, Model};
 use crate::report::{
-    compare_to_threshold, rank_fastest_with_scores, ComparisonReport, ComparisonReportRanking,
-    ComparisonReportRankingData, ComparisonReportRankingResult, ComparisonResult,
+    compare_to_threshold, rank_fastest_with_scores, BenchmarkId, ComparisonReport,
+    ComparisonReportRanking, ComparisonReportRankingData, ComparisonReportRankingResult,
+    ComparisonResult, OwnedMeasurementData,
 };
 use crate::value_formatter::ValueFormatter;
-use std::collections::HashMap;
+use itertools::Itertools;
 use tabled::{
     grid::config::ColoredConfig,
     grid::records::{ExactRecords, PeekableRecords, Records},
@@ -13,56 +15,182 @@ use tabled::{
     Table, Tabled,
 };
 
-pub struct ChangesData {
-    pub group_id: String,
-    pub changes_table_rows: Vec<ChangesTable>,
-    pub ranking_table_rows: Vec<RankingTable>,
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
+use std::fmt;
+use std::ops::{Deref, DerefMut};
+
+pub struct GroupsComparisons(HashMap<String, GroupComparisonTables>);
+
+impl GroupsComparisons {
+    pub fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self(HashMap::with_capacity(capacity))
+    }
 }
 
-impl ChangesData {
-    pub fn new(
-        group_id: String,
-        changes_table_rows: Vec<ChangesTable>,
-        ranking_table_rows: Vec<RankingTable>,
-    ) -> Self {
+impl Deref for GroupsComparisons {
+    type Target = HashMap<String, GroupComparisonTables>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for GroupsComparisons {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl fmt::Display for GroupsComparisons {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (group, comparison_tables) in &**self {
+            let mut changes_table = Table::new(&comparison_tables.changes_table_rows);
+            changes_table.modify((0, 0), Format::content(|_| group.to_string()));
+            changes_table
+                .with(Style::modern())
+                .with(Alignment::center())
+                .with(Alignment::center_vertical());
+            writeln!(f, "{changes_table}")?;
+
+            let mut ranking_table = Table::new(&comparison_tables.ranking_table_rows);
+            ranking_table
+                .with(Style::modern())
+                .with(MergeDuplicatesVerticalFirst)
+                .with(BorderCorrection::span())
+                .with(Alignment::center())
+                .with(Alignment::center_vertical());
+            writeln!(f, "{ranking_table}")?;
+        }
+        Ok(())
+    }
+}
+
+pub struct GroupComparisonTables {
+    group_id: String,
+    changes_table_rows: Vec<ChangesTable>,
+    ranking_table_rows: Vec<RankingTable>,
+}
+
+pub struct IntraGroupComparison {
+    comparison_tables: GroupsComparisons,
+}
+
+impl IntraGroupComparison {
+    pub fn new() -> Self {
         Self {
-            group_id,
-            changes_table_rows,
-            ranking_table_rows,
+            comparison_tables: GroupsComparisons::with_capacity(12),
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     #[inline]
     fn green(&self, s: String) -> String {
         format!("\x1B[32m{s}\x1B[39m")
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     #[inline]
     fn yellow(&self, s: String) -> String {
         format!("\x1B[33m{s}\x1B[39m")
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     #[inline]
     fn red(&self, s: String) -> String {
         format!("\x1B[31m{s}\x1B[39m")
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     #[inline]
     fn bold(&self, s: String) -> String {
         format!("\x1B[1m{s}\x1B[22m")
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     #[inline]
     fn faint(&self, s: String) -> String {
         format!("\x1B[2m{s}\x1B[22m")
     }
 
-    fn intra_group_comparison(
+    pub fn get_intra_group_comparison_data(&mut self, model: &Model, formatter: &ValueFormatter) {
+        for (group_id, benchmark_group) in &model.groups {
+            let e = self.comparison_tables.entry(group_id.to_string());
+            if let Entry::Occupied(mut entry) = e {
+                eprintln!("\nget_intra_group_comparison_data - group_id: {group_id} ");
+                let mut comparisons: Vec<ComparisonReport> = Vec::with_capacity(12);
+                for combinations in benchmark_group
+                    .benchmarks
+                    .iter()
+                    .tuple_combinations::<((&BenchmarkId, &Benchmark), (&BenchmarkId, &Benchmark))>(
+                    )
+                {
+                    let ((id_new, benchmark_new), (id_old, benchmark_old)): (
+                        (&BenchmarkId, &Benchmark),
+                        (&BenchmarkId, &Benchmark),
+                    ) = combinations;
+                    let comp = crate::analysis::analysis_comparison(
+                                        benchmark_new.config.as_ref().unwrap(),
+                                        &benchmark_new
+                                            .raw_analysis_results
+                                            .as_ref()
+                                            .map(|r: &OwnedMeasurementData| -> crate::analysis::MeasuredValues<'_> {
+                                                crate::analysis::MeasuredValues {
+                                                    iteration_count: &r.iter_counts,
+                                                    sample_values: &r.sample_times,
+                                                    avg_values: &r.avg_times,
+                                                }
+                                            })
+                                            .unwrap(),
+                                        &benchmark_old
+                                            .raw_analysis_results
+                                            .as_ref()
+                                            .map(
+                                                |r: &OwnedMeasurementData| -> (
+                                                    crate::analysis::MeasuredValues<'_>,
+                                                    &'_ Estimates,
+                                                ) {
+                                                    (
+                                                        crate::analysis::MeasuredValues {
+                                                            iteration_count: &r.iter_counts,
+                                                            sample_values: &r.sample_times,
+                                                            avg_values: &r.avg_times,
+                                                        },
+                                                        &r.absolute_estimates,
+                                                    )
+                                                },
+                                            )
+                                            .unwrap(),
+                                    );
+
+                    comparisons.push(ComparisonReport {
+                        id_new,
+                        id_old,
+                        benchmark_new,
+                        benchmark_old,
+                        comp,
+                    });
+                }
+
+                if !comparisons.is_empty() {
+                    eprintln!("\nget_intra_group_comparison_data - group_id: {group_id} ");
+                    let k = self.parse_comparisons(group_id, &comparisons, formatter);
+                    entry.insert(k);
+                }
+                drop(comparisons);
+            }
+        }
+    }
+
+    fn parse_comparisons(
         &self,
         group_id: &str,
         comparisons: &Vec<ComparisonReport>,
         formatter: &ValueFormatter,
-    ) -> ChangesData {
+    ) -> GroupComparisonTables {
         // self.text_overwrite();
 
         let mut comparison_report_results: Vec<ComparisonReportRanking> = Vec::with_capacity(12);
@@ -292,11 +420,15 @@ impl ChangesData {
         // eprintln!("2 ranking_table_rows: {ranking_table_rows:?}");
         // print_ranking_table(group_id, &ranking_table_rows);
 
-        ChangesData {
+        GroupComparisonTables {
             group_id: group_id.to_owned(),
-            changes_table_rows: changes_table_rows,
-            ranking_table_rows: ranking_table_rows,
+            changes_table_rows,
+            ranking_table_rows,
         }
+    }
+
+    pub fn print_tables(&self) {
+        eprintln!("{}", self.comparison_tables);
     }
 }
 
@@ -400,32 +532,32 @@ where
     }
 }
 
-pub fn print_changes_table(group_id: &str, rows: &[ChangesTable]) {
-    let mut table = Table::new(rows);
+// pub fn print_changes_table(group_id: &str, rows: &[ChangesTable]) {
+//     let mut table = Table::new(rows);
 
-    table.modify((0, 0), Format::content(|_| group_id.to_string()));
+//     table.modify((0, 0), Format::content(|_| group_id.to_string()));
 
-    table
-        // .with(Style::modern_rounded())
-        .with(Style::modern())
-        // .with(MergeDuplicatesVerticalFirst)
-        // .with(BorderCorrection::span())
-        .with(Alignment::center())
-        .with(Alignment::center_vertical());
+//     table
+//         // .with(Style::modern_rounded())
+//         .with(Style::modern())
+//         // .with(MergeDuplicatesVerticalFirst)
+//         // .with(BorderCorrection::span())
+//         .with(Alignment::center())
+//         .with(Alignment::center_vertical());
 
-    eprintln!("{table}");
-}
+//     eprintln!("{table}");
+// }
 
-pub fn print_ranking_table(group_id: &str, rows: &[RankingTable]) {
-    let mut table = Table::new(rows);
+// pub fn print_ranking_table(group_id: &str, rows: &[RankingTable]) {
+//     let mut table = Table::new(rows);
 
-    table
-        // .with(Style::modern_rounded())
-        .with(Style::modern())
-        .with(MergeDuplicatesVerticalFirst)
-        .with(BorderCorrection::span())
-        .with(Alignment::center())
-        .with(Alignment::center_vertical());
+//     table
+//         // .with(Style::modern_rounded())
+//         .with(Style::modern())
+//         .with(MergeDuplicatesVerticalFirst)
+//         .with(BorderCorrection::span())
+//         .with(Alignment::center())
+//         .with(Alignment::center_vertical());
 
-    eprintln!("{table}");
-}
+//     eprintln!("{table}");
+// }

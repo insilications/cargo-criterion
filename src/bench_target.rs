@@ -3,7 +3,7 @@ use crate::estimate::Estimates;
 use crate::model::{Benchmark, Model};
 use crate::report::{BenchmarkId, ComparisonReport, OwnedMeasurementData, Report, ReportContext};
 use crate::report_table::{
-    print_changes_table, print_ranking_table, ChangesData, ChangesTable, RankingTable,
+    ChangesTable, GroupComparisonTables, IntraGroupComparison, RankingTable,
 };
 use anyhow::{anyhow, Context, Result};
 use itertools::Itertools;
@@ -153,7 +153,7 @@ impl BenchTarget {
             },
         };
         let mut any_from_group_executed = false;
-        let mut intra_group_comparison_changes: Vec<ChangesData> = Vec::with_capacity(12);
+        let mut intra_group_comparison_changes: IntraGroupComparison = IntraGroupComparison::new();
         loop {
             let message_opt = conn.recv().with_context(|| {
                 format!(
@@ -183,75 +183,8 @@ impl BenchTarget {
                             }
 
                             if intra_group_comparison {
-                                for (group_id, benchmark_group) in &model.groups {
-                                    eprintln!("\nPrinting Comparisons - group_id: {group_id} ");
-                                    let mut comparisons: Vec<ComparisonReport> = Vec::new();
-                                    for combinations in
-                                        benchmark_group.benchmarks.iter().tuple_combinations::<(
-                                            (&BenchmarkId, &Benchmark),
-                                            (&BenchmarkId, &Benchmark),
-                                        )>(
-                                        )
-                                    {
-                                        let ((id_new, benchmark_new), (id_old, benchmark_old)): (
-                                            (&BenchmarkId, &Benchmark),
-                                            (&BenchmarkId, &Benchmark),
-                                        ) = combinations;
-                                        let comp = crate::analysis::analysis_comparison(
-                                        benchmark_new.config.as_ref().unwrap(),
-                                        &benchmark_new
-                                            .raw_analysis_results
-                                            .as_ref()
-                                            .map(|r: &OwnedMeasurementData| -> crate::analysis::MeasuredValues<'_> {
-                                                crate::analysis::MeasuredValues {
-                                                    iteration_count: &r.iter_counts,
-                                                    sample_values: &r.sample_times,
-                                                    avg_values: &r.avg_times,
-                                                }
-                                            })
-                                            .unwrap(),
-                                        &benchmark_old
-                                            .raw_analysis_results
-                                            .as_ref()
-                                            .map(
-                                                |r: &OwnedMeasurementData| -> (
-                                                    crate::analysis::MeasuredValues<'_>,
-                                                    &'_ Estimates,
-                                                ) {
-                                                    (
-                                                        crate::analysis::MeasuredValues {
-                                                            iteration_count: &r.iter_counts,
-                                                            sample_values: &r.sample_times,
-                                                            avg_values: &r.avg_times,
-                                                        },
-                                                        &r.absolute_estimates,
-                                                    )
-                                                },
-                                            )
-                                            .unwrap(),
-                                    );
-
-                                        comparisons.push(ComparisonReport {
-                                            id_new,
-                                            id_old,
-                                            benchmark_new,
-                                            benchmark_old,
-                                            comp,
-                                        });
-                                    }
-
-                                    if !comparisons.is_empty() {
-                                        intra_group_comparison_changes.push(
-                                            report.intra_group_comparison(
-                                                group_id,
-                                                &comparisons,
-                                                &context,
-                                                &formatter,
-                                            ),
-                                        );
-                                    }
-                                    drop(comparisons);
-                                }
+                                intra_group_comparison_changes
+                                    .get_intra_group_comparison_data(model, &formatter);
                             }
                         }
                     }
@@ -325,10 +258,7 @@ impl BenchTarget {
                 }
                 Ok(Some(exit_status)) => {
                     if exit_status.success() {
-                        for changes in &intra_group_comparison_changes {
-                            print_changes_table(&changes.group_id, &changes.changes_table_rows);
-                            print_ranking_table(&changes.group_id, &changes.ranking_table_rows);
-                        }
+                        intra_group_comparison_changes.print_tables();
                         return Ok(());
                     } else {
                         return Err(anyhow!(
