@@ -1209,6 +1209,7 @@ impl CliReportIntraGroup {
         print(his, "high severe");
     }
 }
+
 impl Report for CliReportIntraGroup {
     fn benchmark_start(&self, id: &BenchmarkId, _: &ReportContext) {
         self.print_overwritable(format!("Benchmarking {}", id));
