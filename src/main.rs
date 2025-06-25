@@ -35,9 +35,9 @@ mod kde;
 mod message_formats;
 mod model;
 mod report;
+mod report_table;
 mod stats;
 mod value_formatter;
-mod report_table;
 
 use crate::config::{OutputFormat, PlottingBackend, SelfConfig, TextColor};
 use crate::connection::{AxisScale, PlotConfiguration};
@@ -122,7 +122,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let machine_report = message_formats::create_machine_report(self_config);
 
     let mut reports: Vec<&dyn crate::report::Report> = Vec::new();
-    // let mut reports: Vec<crate::report::ReportEnum> = Vec::new();
     match self_config.output_format {
         OutputFormat::Bencher => reports.push(&bencher_report),
         OutputFormat::Criterion | OutputFormat::Quiet | OutputFormat::Verbose => {

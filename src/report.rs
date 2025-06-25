@@ -205,7 +205,7 @@ pub fn rank_fastest_with_scores(reports: &[ComparisonReportRanking]) -> RankingR
         }
     });
 
-    let mut ranks: Vec<Vec<String>> = Vec::new();
+    let mut ranks: Vec<Vec<String>> = Vec::with_capacity(12);
     for (id, s) in entries {
         if ranks
             .last()
