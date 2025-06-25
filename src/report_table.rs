@@ -1,10 +1,36 @@
-use tabled::settings::object::{Cell, Columns, Object, Rows, Segment};
 use tabled::{
     grid::config::ColoredConfig,
     grid::records::{ExactRecords, PeekableRecords, Records},
     settings::{style::Style, themes::BorderCorrection, Alignment, Format, TableOption},
     Table, Tabled,
 };
+
+pub struct ChangesData {
+    pub group_id: String,
+    pub changes_table_rows: Vec<ChangesTable>,
+    pub ranking_table_rows: Vec<RankingTable>,
+}
+
+#[derive(Tabled)]
+pub struct ChangesTable {
+    pub function_id_vs: String,
+    #[tabled(rename = "Latency (mean)")]
+    pub latency_mean: String,
+    #[tabled(rename = "Latency Change (mean)")]
+    pub latency_mean_change: String,
+    #[tabled(rename = "Result")]
+    pub result: String,
+}
+
+#[derive(Tabled, Debug)]
+pub struct RankingTable {
+    #[tabled(rename = "Ranking")]
+    pub ranking: usize,
+    #[tabled(rename = "Function")]
+    pub function_id: String,
+    #[tabled(rename = "Latency (mean)")]
+    pub latency_mean: String,
+}
 
 #[derive(Debug)]
 pub struct MergeDuplicatesVerticalFirst;
@@ -14,8 +40,6 @@ where
     R: Records + PeekableRecords + ExactRecords,
 {
     #[allow(clippy::assigning_clones)]
-    // NOTE: Temporarily disabled due to a issue with `assigning_clones` not respecting MSRV in clippy 1.78.0.
-    //       See https://github.com/rust-lang/rust-clippy/issues/12502
     fn change(self, records: &mut R, cfg: &mut ColoredConfig, _: &mut D) {
         let count_rows = records.count_rows();
         let count_cols = records.count_columns();
@@ -35,7 +59,6 @@ where
                 continue;
             }
 
-            // we need to mitigate messing existing spans
             let is_cell_visible = cfg.is_cell_visible((row, 0).into());
             let is_row_span_cell = cfg.get_column_span((row, 0).into()).is_some();
 
@@ -88,72 +111,32 @@ where
     }
 }
 
-#[derive(Tabled)]
-struct Editor<'a> {
-    Ranking: &'a str,
-    Function: &'a str,
-    #[tabled(rename = "Latency (mean)")]
-    Latency: usize,
-}
-
-#[derive(Tabled)]
-pub struct ChangesTable {
-    pub FunctionIdVs: String,
-    #[tabled(rename = "Latency (mean)")]
-    pub LatencyMean: String,
-    #[tabled(rename = "Latency Change (mean)")]
-    pub LatencyMeanChange: String,
-    pub Result: String,
-}
-
 pub fn print_changes_table(group_id: &str, rows: &[ChangesTable]) {
     let mut table = Table::new(rows);
 
     table.modify((0, 0), Format::content(|_| group_id.to_string()));
 
     table
-        .with(Style::modern_rounded())
-        .with(MergeDuplicatesVerticalFirst)
-        .with(BorderCorrection::span())
+        // .with(Style::modern_rounded())
+        .with(Style::modern())
+        // .with(MergeDuplicatesVerticalFirst)
+        // .with(BorderCorrection::span())
         .with(Alignment::center())
         .with(Alignment::center_vertical());
 
-    println!("{table}");
+    eprintln!("{table}");
 }
 
-fn tt() {
-    #[rustfmt::skip]
-    let data = [
-        Editor { Ranking: "1", Function: "fast", Latency: 21 },
-        Editor { Ranking: "1", Function: "fast2", Latency: 22 },
-        Editor { Ranking: "1", Function: "fast3", Latency: 22 },
-        Editor { Ranking: "2", Function: "original", Latency: 23 },
-        Editor { Ranking: "3", Function: "alternative", Latency: 24 },
-    ];
+pub fn print_ranking_table(group_id: &str, rows: &[RankingTable]) {
+    let mut table = Table::new(rows);
 
-    // data[0].Latency.re
-    let mut table = Table::new(data);
-
-    table.modify((0, 0), Format::content(|s| format!(": {} :", s)));
-
-    table.with(
-        Style::modern_rounded(), // .horizontals([(1, HorizontalLine::inherit(Style::modern_rounded()))])
-                                 // .verticals([(1, VerticalLine::inherit(Style::modern_rounded()))])
-                                 // .remove_horizontal()
-                                 // .remove_horizontals()
-                                 // .remove_vertical()
-                                 // .verticals([(1, VerticalLine::inherit(Style::modern()))]),
-    );
-    // table.with(Merge::vertical())
-    // table.with(Columns::one(0), Merge::vertical());
-    // table.with(BorderCorrection::span());
-    // let sett = Settings::empty().with(Merge::vertical());
-    // table.modify(Columns::one(0), &settings);
-    // table.modify(Rows::first(), sett);
     table
+        // .with(Style::modern_rounded())
+        .with(Style::modern())
         .with(MergeDuplicatesVerticalFirst)
         .with(BorderCorrection::span())
         .with(Alignment::center())
         .with(Alignment::center_vertical());
-    println!("{table}");
+
+    eprintln!("{table}");
 }

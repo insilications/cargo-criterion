@@ -2,6 +2,9 @@ use crate::connection::{AxisScale, Connection, IncomingMessage, PlotConfiguratio
 use crate::estimate::Estimates;
 use crate::model::{Benchmark, Model};
 use crate::report::{BenchmarkId, ComparisonReport, OwnedMeasurementData, Report, ReportContext};
+use crate::report_table::{
+    print_changes_table, print_ranking_table, ChangesData, ChangesTable, RankingTable,
+};
 use anyhow::{anyhow, Context, Result};
 use itertools::Itertools;
 use std::ffi::OsString;
@@ -150,6 +153,7 @@ impl BenchTarget {
             },
         };
         let mut any_from_group_executed = false;
+        let mut intra_group_comparison_changes: Vec<ChangesData> = Vec::with_capacity(12);
         loop {
             let message_opt = conn.recv().with_context(|| {
                 format!(
@@ -237,11 +241,13 @@ impl BenchTarget {
                                     }
 
                                     if !comparisons.is_empty() {
-                                        report.show_intra_group_comparison(
-                                            group_id,
-                                            &comparisons,
-                                            &context,
-                                            &formatter,
+                                        intra_group_comparison_changes.push(
+                                            report.intra_group_comparison(
+                                                group_id,
+                                                &comparisons,
+                                                &context,
+                                                &formatter,
+                                            ),
                                         );
                                     }
                                     drop(comparisons);
@@ -319,6 +325,10 @@ impl BenchTarget {
                 }
                 Ok(Some(exit_status)) => {
                     if exit_status.success() {
+                        for changes in &intra_group_comparison_changes {
+                            print_changes_table(&changes.group_id, &changes.changes_table_rows);
+                            print_ranking_table(&changes.group_id, &changes.ranking_table_rows);
+                        }
                         return Ok(());
                     } else {
                         return Err(anyhow!(

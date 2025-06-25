@@ -35,9 +35,9 @@ mod kde;
 mod message_formats;
 mod model;
 mod report;
-mod report_table;
 mod stats;
 mod value_formatter;
+mod report_table;
 
 use crate::config::{OutputFormat, PlottingBackend, SelfConfig, TextColor};
 use crate::connection::{AxisScale, PlotConfiguration};
