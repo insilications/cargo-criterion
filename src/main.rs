@@ -35,6 +35,7 @@ mod kde;
 mod message_formats;
 mod model;
 mod report;
+mod report_table;
 mod stats;
 mod value_formatter;
 

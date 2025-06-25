@@ -2,6 +2,7 @@ use crate::connection::{PlotConfiguration, Throughput};
 use crate::estimate::{ChangeDistributions, ChangeEstimates, Distributions, Estimate, Estimates};
 use crate::format;
 use crate::model::{Benchmark, BenchmarkGroup, Model, SavedStatistics};
+use crate::report_table::{print_changes_table, ChangesTable};
 use crate::stats::bivariate::regression::Slope;
 use crate::stats::bivariate::Data;
 use crate::stats::univariate::outliers::tukey::LabeledSample;
@@ -10,7 +11,7 @@ use crate::stats::Distribution;
 use crate::value_formatter::ValueFormatter;
 use cli_table::{
     format::{Align, Border, HorizontalLine, Justify, Separator, VerticalLine},
-    print_stderr, Cell as TableCell, CellStruct, Color, Style, Table,
+    print_stderr, Cell as TableCell, CellStruct, Style, Table,
 };
 use std::cell::Cell;
 use std::cmp;
@@ -1463,11 +1464,13 @@ impl Report for CliReportIntraGroup {
         self.text_overwrite();
 
         let mut comparison_report_results: Vec<ComparisonReportRanking> = Vec::new();
-        let mut data: Vec<Vec<CellStruct>> = Vec::new();
+        // let mut data: Vec<Vec<CellStruct>> = Vec::new();
         let mut p_value_formatters: HashMap<format::FloatKey, format::PValueFormatter> =
             HashMap::new();
+
+        let mut rows: Vec<ChangesTable> = Vec::new();
         for comparison in comparisons {
-            let mut rows: Vec<CellStruct> = Vec::new();
+            // let mut rows: Vec<CellStruct> = Vec::new();
 
             let comp = &comparison.comp;
             let significance_threshold = comp.significance_threshold;
@@ -1588,23 +1591,13 @@ impl Report for CliReportIntraGroup {
                 });
             }
 
-            rows.push(
-                format!(
+            rows.push(ChangesTable {
+                FunctionIdVs: format!(
                     "{} vs {}",
                     &function_id_old_color_str, &function_id_new_color_str
-                )
-                .cell()
-                .justify(Justify::Center)
-                .align(Align::Center),
-            );
-            rows.push(
-                format!("{} vs {}", &benchmark_old_mean_str, &benchmark_new_mean_str)
-                    .cell()
-                    .justify(Justify::Center)
-                    .align(Align::Center),
-            );
-            rows.push(
-                format!(
+                ),
+                LatencyMean: format!("{} vs {}", &benchmark_old_mean_str, &benchmark_new_mean_str),
+                LatencyMeanChange: format!(
                     "{} [{:+.2},{:+.2}] {}% CI (p = {} {} {})",
                     &mean_diff,
                     mean_diff_ci_lower_bound,
@@ -1613,78 +1606,99 @@ impl Report for CliReportIntraGroup {
                     p_value_formatter.fmt(comp.p_value),
                     if is_mean_different { "<" } else { ">" },
                     &significance_threshold
-                )
-                .cell()
-                .justify(Justify::Center)
-                .align(Align::Center),
-            );
-            rows.push(
-                explanation_str
-                    .cell()
-                    .justify(Justify::Center)
-                    .align(Align::Center),
-            );
-            data.push(rows);
+                ),
+                Result: explanation_str,
+            });
+
+            // rows.push(
+            //     format!(
+            //         "{} vs {}",
+            //         &function_id_old_color_str, &function_id_new_color_str
+            //     )
+            //     .cell()
+            //     .justify(Justify::Center)
+            //     .align(Align::Center),
+            // );
+            // rows.push(
+            //     format!("{} vs {}", &benchmark_old_mean_str, &benchmark_new_mean_str)
+            //         .cell()
+            //         .justify(Justify::Center)
+            //         .align(Align::Center),
+            // );
+            // rows.push(
+            //     format!(
+            //         "{} [{:+.2},{:+.2}] {}% CI (p = {} {} {})",
+            //         &mean_diff,
+            //         mean_diff_ci_lower_bound,
+            //         mean_diff_ci_upper_bound,
+            //         (ci.confidence_level * 1000.0) / 10.0,
+            //         p_value_formatter.fmt(comp.p_value),
+            //         if is_mean_different { "<" } else { ">" },
+            //         &significance_threshold
+            //     )
+            //     .cell()
+            //     .justify(Justify::Center)
+            //     .align(Align::Center),
+            // );
+            // rows.push(
+            //     explanation_str
+            //         .cell()
+            //         .justify(Justify::Center)
+            //         .align(Align::Center),
+            // );
+            // data.push(rows);
         }
-        let data_table = data
-            .table()
-            .title(vec![
-                group_id
-                    .cell()
-                    .justify(Justify::Center)
-                    .align(Align::Center)
-                    .bold(true),
-                "Latency (mean)"
-                    .cell()
-                    .justify(Justify::Center)
-                    .align(Align::Center)
-                    .bold(true),
-                "Latency Change (mean)"
-                    .cell()
-                    .justify(Justify::Center)
-                    .align(Align::Center)
-                    .bold(true),
-                "Result"
-                    .cell()
-                    .justify(Justify::Center)
-                    .align(Align::Center)
-                    .bold(true),
-            ])
-            .separator(
-                Separator::builder()
-                    .row(Some(HorizontalLine::new('├', '┤', '┼', '─')))
-                    .title(Some(HorizontalLine::new('├', '┤', '┼', '─')))
-                    .column(Some(VerticalLine::new('│')))
-                    .build(),
-            )
-            .border(
-                Border::builder()
-                    // .top(HorizontalLine::new('╭', '╮', '┬', '─'))
-                    .top(HorizontalLine::new('┌', '┐', '┬', '─'))
-                    // .bottom(HorizontalLine::new('╰', '╯', '┴', '─'))
-                    .bottom(HorizontalLine::new('└', '┘', '┴', '─'))
-                    .left(VerticalLine::new('│'))
-                    .right(VerticalLine::new('│'))
-                    .build(),
-            )
-            .bold(true);
+        // let data_table = data
+        //     .table()
+        //     .title(vec![
+        //         group_id
+        //             .cell()
+        //             .justify(Justify::Center)
+        //             .align(Align::Center)
+        //             .bold(true),
+        //         "Latency (mean)"
+        //             .cell()
+        //             .justify(Justify::Center)
+        //             .align(Align::Center)
+        //             .bold(true),
+        //         "Latency Change (mean)"
+        //             .cell()
+        //             .justify(Justify::Center)
+        //             .align(Align::Center)
+        //             .bold(true),
+        //         "Result"
+        //             .cell()
+        //             .justify(Justify::Center)
+        //             .align(Align::Center)
+        //             .bold(true),
+        //     ])
+        //     .separator(
+        //         Separator::builder()
+        //             .row(Some(HorizontalLine::new('├', '┤', '┼', '─')))
+        //             .title(Some(HorizontalLine::new('├', '┤', '┼', '─')))
+        //             .column(Some(VerticalLine::new('│')))
+        //             .build(),
+        //     )
+        //     .border(
+        //         Border::builder()
+        //             // .top(HorizontalLine::new('╭', '╮', '┬', '─'))
+        //             .top(HorizontalLine::new('┌', '┐', '┬', '─'))
+        //             // .bottom(HorizontalLine::new('╰', '╯', '┴', '─'))
+        //             .bottom(HorizontalLine::new('└', '┘', '┴', '─'))
+        //             .left(VerticalLine::new('│'))
+        //             .right(VerticalLine::new('│'))
+        //             .build(),
+        //     )
+        //     .bold(true);
 
-        let _ = print_stderr(data_table);
+        // let _ = print_stderr(data_table);
 
-        // let ranking1 = rank_functions(&comparison_report_results);
-        // pretty_print_ranking("ranking1", &ranking1);
-
-        // let ranking2 = rank_fastest(&comparison_report_results);
-        // pretty_print_ranking2(&ranking2);
+        print_changes_table(group_id, &rows);
 
         let ranking = rank_fastest_with_scores(&comparison_report_results);
         eprintln!("1 ranking: {ranking:?}");
         eprintln!("2 ranking: {ranking}");
         // pretty_print_ranking_with_scores(&ranking);
-
-        // for r in comparison_report_results {
-        //     eprintln!("{r:?}");
-        // }
     }
 }
 
