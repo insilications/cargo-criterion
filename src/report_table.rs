@@ -14,7 +14,6 @@ use crate::{
 //     ComparisonResult, OwnedMeasurementData,
 // };
 use itertools::Itertools;
-use linked_hash_map::{Iter, LinkedHashMap};
 use tabled::{
     grid::config::ColoredConfig,
     grid::records::{ExactRecords, PeekableRecords, Records},
@@ -26,6 +25,47 @@ use std::collections::HashMap;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::{collections::hash_map::Entry, ops::Range};
+
+#[derive(Debug, Clone)]
+pub struct Details<'my_lifetime> {
+    pub id: &'my_lifetime str,
+    pub addresses: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct User<'my_lifetime> {
+    pub id: &'my_lifetime str,
+    pub details: &'my_lifetime Details<'my_lifetime>,
+}
+
+pub fn create_user<'my_lifetime>(
+    id: &'my_lifetime str,
+    details: &'my_lifetime Details<'my_lifetime>,
+) -> User<'my_lifetime> {
+    User { id, details }
+}
+
+fn main1() {
+    let id: String = "my user".into();
+    let details: Details = Details {
+        id: &id,
+        addresses: vec!["address1".into(), "address2".into()],
+    };
+
+    let user: User<'_> = create_user(&id, &details);
+    println!("user: {user:?}");
+}
+
+fn main2<'my_lifetime>() {
+    let id: String = "my user".into();
+    let details: Details = Details {
+        id: &id,
+        addresses: vec!["address1".into(), "address2".into()],
+    };
+
+    let user: User<'my_lifetime> = create_user(&id, &details);
+    println!("user: {user:?}");
+}
 
 pub struct ComparisonReport<'benchmark_group> {
     pub id_new: &'benchmark_group BenchmarkId,
@@ -290,24 +330,24 @@ impl IntraGroupComparison {
         }
     }
 
-    pub fn get_intra_group_comparison_data<'benchmark_group>(
+    pub fn get_intra_group_comparison_data<'group_id, 'formatter, 'benchmark_group>(
         &mut self,
-        group_id: &str,
+        group_id: &'group_id str,
         benchmark_group: &'benchmark_group BenchmarkGroup,
-        formatter: &ValueFormatter,
+        formatter: &'formatter ValueFormatter<'formatter>,
     ) {
-        let mut comparisons: Vec<ComparisonReport<'benchmark_group>> = Vec::with_capacity(12);
-        for ((id_new, benchmark_new), (id_old, benchmark_old)) in
-            benchmark_group.benchmarks.iter().tuple_combinations::<(
+        let mut comparisons_report: Vec<ComparisonReport<'benchmark_group>> =
+            Vec::with_capacity(12);
+        // for ((id_new, benchmark_new), (id_old, benchmark_old)) in
+        for combinations in benchmark_group.benchmarks.iter().tuple_combinations::<(
+            (&'benchmark_group BenchmarkId, &'benchmark_group Benchmark),
+            (&'benchmark_group BenchmarkId, &'benchmark_group Benchmark),
+        )>() {
+            let ((id_new, benchmark_new), (id_old, benchmark_old)): (
                 (&'benchmark_group BenchmarkId, &'benchmark_group Benchmark),
                 (&'benchmark_group BenchmarkId, &'benchmark_group Benchmark),
-            )>()
-        {
-            // let ((id_new, benchmark_new), (id_old, benchmark_old)): (
-            //     (&'benchmark_group BenchmarkId, &'benchmark_group Benchmark),
-            //     (&'benchmark_group BenchmarkId, &'benchmark_group Benchmark),
-            // ) = combinations;
-            let kk: &SavedStatistics = &benchmark_new.latest_stats;
+            ) = combinations;
+
             let comp: ComparisonData = crate::analysis::analysis_comparison(
                                         benchmark_new.config.as_ref().unwrap(),
                                         &benchmark_new
@@ -341,7 +381,7 @@ impl IntraGroupComparison {
                                             )
                                             .unwrap(),
                                     );
-            comparisons.push(ComparisonReport::<'benchmark_group> {
+            comparisons_report.push(ComparisonReport::<'benchmark_group> {
                 id_new,
                 id_old,
                 benchmark_new,
@@ -350,9 +390,10 @@ impl IntraGroupComparison {
             });
         }
 
-        //         if !comparisons.is_empty() {
-        //             e.insert(Self::parse_comparisons(&comparisons, formatter));
-        //         }
+        if !comparisons_report.is_empty() {
+            let kk = Self::parse_comparisons(&comparisons_report, formatter);
+            //             e.insert(Self::parse_comparisons(&comparisons, formatter));
+        }
         //         drop(comparisons);
         //     }
         // }
@@ -424,9 +465,9 @@ impl IntraGroupComparison {
     //     }
     // }
 
-    fn parse_comparisons(
-        comparisons: &Vec<ComparisonReport>,
-        formatter: &ValueFormatter,
+    fn parse_comparisons<'formatter, 'benchmark_group>(
+        comparisons_report: &'benchmark_group Vec<ComparisonReport<'benchmark_group>>,
+        formatter: &'formatter ValueFormatter<'formatter>,
     ) -> GroupComparisonTables {
         let mut comparison_report_results: Vec<ComparisonReportRanking> = Vec::with_capacity(12);
         let mut p_value_formatters: HashMap<format::FloatKey, format::PValueFormatter> =
@@ -436,7 +477,7 @@ impl IntraGroupComparison {
         let mut functions_comparison_report_data: HashMap<String, ComparisonReportRankingData> =
             HashMap::with_capacity(12);
 
-        for comparison in comparisons {
+        for comparison in comparisons_report {
             let comp = &comparison.comp;
             let significance_threshold = comp.significance_threshold;
             let is_mean_different = comp.p_value < significance_threshold;
