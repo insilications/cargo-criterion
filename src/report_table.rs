@@ -1,10 +1,13 @@
-use crate::estimate::{ConfidenceInterval, Estimates};
 use crate::format;
 use crate::model::{Benchmark, BenchmarkGroup, Model};
 use crate::report::{
     compare_to_threshold, BenchmarkId, ComparisonData, ComparisonResult, OwnedMeasurementData,
 };
 use crate::value_formatter::ValueFormatter;
+use crate::{
+    estimate::{ConfidenceInterval, Estimates},
+    model::SavedStatistics,
+};
 // use crate::report::{
 //     compare_to_threshold, rank_fastest_with_scores, BenchmarkId, ComparisonReport,
 //     ComparisonReportRanking, ComparisonReportRankingData, ComparisonReportRankingResult,
@@ -304,7 +307,7 @@ impl IntraGroupComparison {
             //     (&'benchmark_group BenchmarkId, &'benchmark_group Benchmark),
             //     (&'benchmark_group BenchmarkId, &'benchmark_group Benchmark),
             // ) = combinations;
-            let kk = &benchmark_new.latest_stats;
+            let kk: &SavedStatistics = &benchmark_new.latest_stats;
             let comp: ComparisonData = crate::analysis::analysis_comparison(
                                         benchmark_new.config.as_ref().unwrap(),
                                         &benchmark_new
