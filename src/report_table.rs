@@ -1,13 +1,17 @@
 use crate::estimate::{ConfidenceInterval, Estimates};
 use crate::format;
-use crate::model::{Benchmark, Model};
+use crate::model::{Benchmark, BenchmarkGroup, Model};
 use crate::report::{
-    compare_to_threshold, rank_fastest_with_scores, BenchmarkId, ComparisonReport,
-    ComparisonReportRanking, ComparisonReportRankingData, ComparisonReportRankingResult,
-    ComparisonResult, OwnedMeasurementData,
+    compare_to_threshold, BenchmarkId, ComparisonData, ComparisonResult, OwnedMeasurementData,
 };
 use crate::value_formatter::ValueFormatter;
+// use crate::report::{
+//     compare_to_threshold, rank_fastest_with_scores, BenchmarkId, ComparisonReport,
+//     ComparisonReportRanking, ComparisonReportRankingData, ComparisonReportRankingResult,
+//     ComparisonResult, OwnedMeasurementData,
+// };
 use itertools::Itertools;
+use linked_hash_map::{Iter, LinkedHashMap};
 use tabled::{
     grid::config::ColoredConfig,
     grid::records::{ExactRecords, PeekableRecords, Records},
@@ -15,10 +19,159 @@ use tabled::{
     Table, Tabled,
 };
 
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
+use std::{collections::hash_map::Entry, ops::Range};
+
+pub struct ComparisonReport<'benchmark_group> {
+    pub id_new: &'benchmark_group BenchmarkId,
+    pub id_old: &'benchmark_group BenchmarkId,
+    pub benchmark_new: &'benchmark_group Benchmark,
+    pub benchmark_old: &'benchmark_group Benchmark,
+    pub comp: ComparisonData,
+}
+
+#[derive(Debug)]
+pub enum ComparisonReportRankingResult {
+    Improved,                // +2 score for new, -2 score for old
+    Regressed,               // +2 score for old, -2 score for new
+    NonSignificantImproved,  // +1 score for new, -1 score for old
+    NonSignificantRegressed, // +1 score for old, -1 score for new
+    NoChange,                //  0 score
+}
+
+#[derive(Debug)]
+pub struct ComparisonReportRanking {
+    pub function_id_new: String,
+    pub function_id_old: String,
+    pub result: ComparisonReportRankingResult,
+}
+
+pub struct ComparisonReportRankingData {
+    pub latency_mean_str: String,
+    pub latency_mean: f64,
+    pub latency_mean_ci: ConfidenceInterval,
+}
+
+/// Fast-to-slow ranking plus scores.
+#[derive(Debug)]
+pub struct RankingResult {
+    /// Vector of ranking tiers (fastest → slowest).
+    /// Each inner `Vec<String>` holds all function IDs that are tied.
+    pub ranks: Vec<Vec<String>>,
+
+    /// Score – identical for every member of the same tier. For debugging purposes.
+    pub scores: HashMap<String, i32>,
+}
+
+/// Score-based ranking WITHOUT equivalence classes.
+///
+/// • Every function keeps its own score; `NoChange` contributes 0.
+/// • Functions are ranked by that score (descending).
+/// • If two or more functions end up with the *exact* same score
+///   they share a tier, because the score alone cannot order them.
+///
+/// Complexity
+///   n = #reports, m = #distinct function IDs
+///   • scoring loop            : O(n)
+///   • sort by score           : O(m log m)  (dominant)
+///   • total memory            : O(m)
+///
+/// All data structures are pre-allocated where possible; the function
+/// uses only safe Rust and does not perform unnecessary cloning.
+pub fn rank_fastest_with_scores(reports: &[ComparisonReportRanking]) -> RankingResult {
+    // 0. Map every unique function ID → dense index 0‥m-1
+    let mut id_to_idx: HashMap<String, usize> = HashMap::with_capacity(reports.len() * 2); // rough upper bound
+    let mut next_idx = 0usize;
+
+    for r in reports {
+        // new side
+        id_to_idx
+            .entry(r.function_id_new.clone())
+            .or_insert_with(|| {
+                let idx = next_idx;
+                next_idx += 1;
+                idx
+            });
+        // old side
+        id_to_idx
+            .entry(r.function_id_old.clone())
+            .or_insert_with(|| {
+                let idx = next_idx;
+                next_idx += 1;
+                idx
+            });
+    }
+
+    // 1. Per-ID score vector
+    let mut score = vec![0i32; next_idx];
+
+    for r in reports {
+        let a = id_to_idx[&r.function_id_new];
+        let b = id_to_idx[&r.function_id_old];
+        match r.result {
+            ComparisonReportRankingResult::Improved => {
+                // +2 score for new, -2 score for old
+                score[a] += 2;
+                score[b] -= 2;
+            }
+            ComparisonReportRankingResult::Regressed => {
+                // +2 score for old, -2 score for new
+                score[a] -= 2;
+                score[b] += 2;
+            }
+            ComparisonReportRankingResult::NonSignificantImproved => {
+                // +1 score for new, -1 score for old
+                score[a] += 1;
+                score[b] -= 1;
+            }
+            ComparisonReportRankingResult::NonSignificantRegressed => {
+                // +1 score for old, -1 score for new
+                score[a] -= 1;
+                score[b] += 1;
+            }
+            ComparisonReportRankingResult::NoChange => { /* 0 pts */ }
+        }
+    }
+
+    // 2. Build score maps
+    let mut id_to_score: HashMap<String, i32> = HashMap::with_capacity(id_to_idx.len());
+    for (id, &idx) in &id_to_idx {
+        id_to_score.insert(id.clone(), score[idx]);
+    }
+
+    // 3. Sort by score (descending) and group ties
+    let mut entries: Vec<(String, i32)> =
+        id_to_score.iter().map(|(id, &s)| (id.clone(), s)).collect();
+
+    entries.sort_unstable_by(|a, b| {
+        let ord = b.1.cmp(&a.1); // score DESC
+        if ord == std::cmp::Ordering::Equal {
+            a.0.cmp(&b.0) // name ASC (stable tie-break)
+        } else {
+            ord
+        }
+    });
+
+    let mut ranks: Vec<Vec<String>> = Vec::with_capacity(12);
+    for (id, s) in entries {
+        if ranks
+            .last()
+            .is_none_or(|g: &Vec<String>| id_to_score[&g[0]] != s)
+        {
+            ranks.push(vec![id]); // new tier
+        } else {
+            ranks.last_mut().unwrap().push(id); // same tier
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    RankingResult {
+        ranks,
+        scores: id_to_score,
+    }
+}
 
 pub struct GroupsComparisons(HashMap<String, GroupComparisonTables>);
 
@@ -134,23 +287,25 @@ impl IntraGroupComparison {
         }
     }
 
-    pub fn get_intra_group_comparison_data(&mut self, model: &Model, formatter: &ValueFormatter) {
-        for (group_id, benchmark_group) in &model.groups {
-            let entry = self.comparison_tables.entry(group_id.to_string());
-            if let Entry::Vacant(e) = entry {
-                eprintln!("\nget_intra_group_comparison_data - group_id: {group_id} ");
-                let mut comparisons: Vec<ComparisonReport> = Vec::with_capacity(12);
-                for combinations in benchmark_group
-                    .benchmarks
-                    .iter()
-                    .tuple_combinations::<((&BenchmarkId, &Benchmark), (&BenchmarkId, &Benchmark))>(
-                    )
-                {
-                    let ((id_new, benchmark_new), (id_old, benchmark_old)): (
-                        (&BenchmarkId, &Benchmark),
-                        (&BenchmarkId, &Benchmark),
-                    ) = combinations;
-                    let comp = crate::analysis::analysis_comparison(
+    pub fn get_intra_group_comparison_data<'benchmark_group>(
+        &mut self,
+        group_id: &str,
+        benchmark_group: &'benchmark_group BenchmarkGroup,
+        formatter: &ValueFormatter,
+    ) {
+        let mut comparisons: Vec<ComparisonReport<'benchmark_group>> = Vec::with_capacity(12);
+        for ((id_new, benchmark_new), (id_old, benchmark_old)) in
+            benchmark_group.benchmarks.iter().tuple_combinations::<(
+                (&'benchmark_group BenchmarkId, &'benchmark_group Benchmark),
+                (&'benchmark_group BenchmarkId, &'benchmark_group Benchmark),
+            )>()
+        {
+            // let ((id_new, benchmark_new), (id_old, benchmark_old)): (
+            //     (&'benchmark_group BenchmarkId, &'benchmark_group Benchmark),
+            //     (&'benchmark_group BenchmarkId, &'benchmark_group Benchmark),
+            // ) = combinations;
+            let kk = &benchmark_new.latest_stats;
+            let comp: ComparisonData = crate::analysis::analysis_comparison(
                                         benchmark_new.config.as_ref().unwrap(),
                                         &benchmark_new
                                             .raw_analysis_results
@@ -183,32 +338,93 @@ impl IntraGroupComparison {
                                             )
                                             .unwrap(),
                                     );
-
-                    comparisons.push(ComparisonReport {
-                        id_new,
-                        id_old,
-                        benchmark_new,
-                        benchmark_old,
-                        comp,
-                    });
-                }
-
-                if !comparisons.is_empty() {
-                    eprintln!("\nget_intra_group_comparison_data - group_id: {group_id} ");
-                    e.insert(Self::parse_comparisons(&comparisons, formatter));
-                }
-                drop(comparisons);
-            }
+            comparisons.push(ComparisonReport::<'benchmark_group> {
+                id_new,
+                id_old,
+                benchmark_new,
+                benchmark_old,
+                comp,
+            });
         }
+
+        //         if !comparisons.is_empty() {
+        //             e.insert(Self::parse_comparisons(&comparisons, formatter));
+        //         }
+        //         drop(comparisons);
+        //     }
+        // }
     }
+    // pub fn get_intra_group_comparison_data(&mut self, model: &Model, formatter: &ValueFormatter) {
+    //     for (group_id, benchmark_group) in &model.groups {
+    //         let entry = self.comparison_tables.entry(group_id.to_string());
+    //         if let Entry::Vacant(e) = entry {
+    //             eprintln!("\nget_intra_group_comparison_data - group_id: {group_id} ");
+    //             let mut comparisons: Vec<ComparisonReport> = Vec::with_capacity(12);
+    //             for combinations in benchmark_group
+    //                 .benchmarks
+    //                 .iter()
+    //                 .tuple_combinations::<((&BenchmarkId, &Benchmark), (&BenchmarkId, &Benchmark))>(
+    //                 )
+    //             {
+    //                 let ((id_new, benchmark_new), (id_old, benchmark_old)): (
+    //                     (&BenchmarkId, &Benchmark),
+    //                     (&BenchmarkId, &Benchmark),
+    //                 ) = combinations;
+    //                 let comp = crate::analysis::analysis_comparison(
+    //                                     benchmark_new.config.as_ref().unwrap(),
+    //                                     &benchmark_new
+    //                                         .raw_analysis_results
+    //                                         .as_ref()
+    //                                         .map(|r: &OwnedMeasurementData| -> crate::analysis::MeasuredValues<'_> {
+    //                                             crate::analysis::MeasuredValues {
+    //                                                 iteration_count: &r.iter_counts,
+    //                                                 sample_values: &r.sample_times,
+    //                                                 avg_values: &r.avg_times,
+    //                                             }
+    //                                         })
+    //                                         .unwrap(),
+    //                                     &benchmark_old
+    //                                         .raw_analysis_results
+    //                                         .as_ref()
+    //                                         .map(
+    //                                             |r: &OwnedMeasurementData| -> (
+    //                                                 crate::analysis::MeasuredValues<'_>,
+    //                                                 &'_ Estimates,
+    //                                             ) {
+    //                                                 (
+    //                                                     crate::analysis::MeasuredValues {
+    //                                                         iteration_count: &r.iter_counts,
+    //                                                         sample_values: &r.sample_times,
+    //                                                         avg_values: &r.avg_times,
+    //                                                     },
+    //                                                     &r.absolute_estimates,
+    //                                                 )
+    //                                             },
+    //                                         )
+    //                                         .unwrap(),
+    //                                 );
+
+    //                 comparisons.push(ComparisonReport {
+    //                     id_new,
+    //                     id_old,
+    //                     benchmark_new,
+    //                     benchmark_old,
+    //                     comp,
+    //                 });
+    //             }
+
+    //             if !comparisons.is_empty() {
+    //                 e.insert(Self::parse_comparisons(&comparisons, formatter));
+    //             }
+    //             drop(comparisons);
+    //         }
+    //     }
+    // }
 
     fn parse_comparisons(
-        // group_id: &str,
         comparisons: &Vec<ComparisonReport>,
         formatter: &ValueFormatter,
     ) -> GroupComparisonTables {
-        // self.text_overwrite();
-
         let mut comparison_report_results: Vec<ComparisonReportRanking> = Vec::with_capacity(12);
         let mut p_value_formatters: HashMap<format::FloatKey, format::PValueFormatter> =
             HashMap::with_capacity(12);
@@ -223,6 +439,7 @@ impl IntraGroupComparison {
             let is_mean_different = comp.p_value < significance_threshold;
             let mean_diff_est = &comp.relative_estimates.mean;
             let mean_diff_point_estimate = mean_diff_est.point_estimate;
+
             let benchmark_old_mean = comparison
                 .benchmark_old
                 .raw_analysis_results
@@ -386,7 +603,8 @@ impl IntraGroupComparison {
                     &mean_diff,
                     mean_diff_ci_lower_bound,
                     mean_diff_ci_upper_bound,
-                    (mean_diff_ci.confidence_level * 1000.0) / 10.0,
+                    // (mean_diff_ci.confidence_level * 1000.0) / 10.0,
+                    (mean_diff_ci.confidence_level * 100.0),
                     p_value_formatter.fmt(comp.p_value),
                     if is_mean_different { "<" } else { ">" },
                     &significance_threshold
@@ -395,10 +613,9 @@ impl IntraGroupComparison {
             });
         }
 
-        let ranking = rank_fastest_with_scores(&comparison_report_results);
-        eprintln!("rank_fastest_with_scores: {ranking:?}");
+        let ranking: RankingResult = rank_fastest_with_scores(&comparison_report_results);
+        // eprintln!("rank_fastest_with_scores: {ranking:?}");
         let mut ranking_table_rows: Vec<RankingTable> = Vec::with_capacity(12);
-
         for (idx, functions) in ranking.ranks.iter().enumerate() {
             struct RankTempData {
                 function_id: String,
@@ -419,18 +636,48 @@ impl IntraGroupComparison {
             }
 
             rank_temp.sort_by(|a, b| a.latency_mean.partial_cmp(&b.latency_mean).unwrap());
+            // let min_latency_mean = rank_temp.first().unwrap().latency_mean;
+            let mut min_latency_mean: f64 = 1.0;
+            // if idx == 0 {
+            //     min_latency_mean = r.latency_mean;
+            // }
             for r in &rank_temp {
-                ranking_table_rows.push(RankingTable {
-                    ranking: idx + 1,
-                    function_id: r.function_id.clone(),
-                    latency_mean: format!(
-                        "{} [{:.2},{:.2}] {}% CI",
-                        r.latency_mean_str,
-                        r.latency_mean_ci.lower_bound,
-                        r.latency_mean_ci.upper_bound,
-                        (r.latency_mean_ci.confidence_level * 1000.0) / 10.0,
-                    ),
-                });
+                // for (i, r) in rank_temp.iter().enumerate() {
+                if idx == 0 {
+                    ranking_table_rows.push(RankingTable {
+                        ranking: idx + 1,
+                        function_id: r.function_id.clone(),
+                        latency_mean: format!(
+                            "{} [{:.2},{:.2}] {}% CI",
+                            r.latency_mean_str,
+                            r.latency_mean_ci.lower_bound,
+                            r.latency_mean_ci.upper_bound,
+                            // (r.latency_mean_ci.confidence_level * 1000.0) / 10.0,
+                            (r.latency_mean_ci.confidence_level * 100.0),
+                        ),
+                        // relative_performance: "1x".to_string(),
+                        relative_performance: String::new(),
+                    });
+                } else {
+                    let ratio_to_baseline: f64 = r.latency_mean / min_latency_mean;
+                    ranking_table_rows.push(RankingTable {
+                        ranking: idx + 1,
+                        function_id: r.function_id.clone(),
+                        latency_mean: format!(
+                            "{} [{:.2},{:.2}] {}% CI",
+                            r.latency_mean_str,
+                            r.latency_mean_ci.lower_bound,
+                            r.latency_mean_ci.upper_bound,
+                            // (r.latency_mean_ci.confidence_level * 1000.0) / 10.0,
+                            (r.latency_mean_ci.confidence_level * 100.0),
+                        ),
+                        relative_performance: format!(
+                            "{:.2}x increase in execution time ({:.2}%)",
+                            ratio_to_baseline,
+                            (ratio_to_baseline - 1.0) * 100.0
+                        ),
+                    });
+                }
             }
         }
 
@@ -464,6 +711,8 @@ pub struct RankingTable {
     pub function_id: String,
     #[tabled(rename = "Latency (mean)")]
     pub latency_mean: String,
+    #[tabled(rename = "Relative Performance")]
+    pub relative_performance: String,
 }
 
 #[derive(Debug)]
@@ -544,33 +793,3 @@ where
         // }
     }
 }
-
-// pub fn print_changes_table(group_id: &str, rows: &[ChangesTable]) {
-//     let mut table = Table::new(rows);
-
-//     table.modify((0, 0), Format::content(|_| group_id.to_string()));
-
-//     table
-//         // .with(Style::modern_rounded())
-//         .with(Style::modern())
-//         // .with(MergeDuplicatesVerticalFirst)
-//         // .with(BorderCorrection::span())
-//         .with(Alignment::center())
-//         .with(Alignment::center_vertical());
-
-//     eprintln!("{table}");
-// }
-
-// pub fn print_ranking_table(group_id: &str, rows: &[RankingTable]) {
-//     let mut table = Table::new(rows);
-
-//     table
-//         // .with(Style::modern_rounded())
-//         .with(Style::modern())
-//         .with(MergeDuplicatesVerticalFirst)
-//         .with(BorderCorrection::span())
-//         .with(Alignment::center())
-//         .with(Alignment::center_vertical());
-
-//     eprintln!("{table}");
-// }

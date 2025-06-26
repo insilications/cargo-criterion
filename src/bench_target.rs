@@ -1,12 +1,8 @@
 use crate::connection::{AxisScale, Connection, IncomingMessage, PlotConfiguration};
-use crate::estimate::Estimates;
-use crate::model::{Benchmark, Model};
-use crate::report::{BenchmarkId, ComparisonReport, OwnedMeasurementData, Report, ReportContext};
-use crate::report_table::{
-    ChangesTable, GroupComparisonTables, IntraGroupComparison, RankingTable,
-};
+use crate::model::Model;
+use crate::report::{BenchmarkId, Report, ReportContext};
+use crate::report_table::IntraGroupComparison;
 use anyhow::{anyhow, Context, Result};
-use itertools::Itertools;
 use std::ffi::OsString;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -175,6 +171,22 @@ impl BenchTarget {
                             "============ FinishedBenchmarkGroup - name: {} - group: {} ============\n",
                             self.name, group
                         );
+                        // for (benchmark_id, benchmark) in &benchmark_group.benchmarks {
+                        //     eprintln!("\nFinishedBenchmarkGroup - benchmark_id: {benchmark_id:?}");
+                        //     eprintln!(
+                        //         "FinishedBenchmarkGroup - point_estimate: {}\n",
+                        //         benchmark.raw_analysis_results.as_ref().map_or(
+                        //             0.0,
+                        //             |owned_measurement_data| {
+                        //                 owned_measurement_data
+                        //                     .absolute_estimates
+                        //                     .mean
+                        //                     .point_estimate
+                        //             },
+                        //         )
+                        //     );
+                        // }
+
                         {
                             let formatter = crate::value_formatter::ValueFormatter::new(&mut conn);
                             report.summarize(&context, &group, benchmark_group, &formatter);
@@ -183,8 +195,11 @@ impl BenchTarget {
                             }
 
                             if intra_group_comparison {
-                                intra_group_comparison_changes
-                                    .get_intra_group_comparison_data(model, &formatter);
+                                intra_group_comparison_changes.get_intra_group_comparison_data(
+                                    &group,
+                                    benchmark_group,
+                                    &formatter,
+                                );
                             }
                         }
                     }
