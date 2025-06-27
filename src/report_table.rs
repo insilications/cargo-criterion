@@ -99,8 +99,8 @@ pub struct RankingResultExtended<'benchmark_group> {
 ///
 /// All data structures are pre-allocated where possible; the function
 /// uses only safe Rust and does not perform unnecessary cloning.
-pub fn rank_fastest_with_scores<'benchmark_group>(
-    comparisons_report: &'benchmark_group [ComparisonReport<'benchmark_group>],
+pub fn rank_fastest_with_scores<'my_comparisons_report, 'benchmark_group>(
+    comparisons_report: &'my_comparisons_report [ComparisonReport<'benchmark_group>],
 ) -> RankingResult {
     // 0. Map every unique function ID → dense index 0‥m-1
     let mut id_to_idx: HashMap<String, usize> =
@@ -374,11 +374,11 @@ impl IntraGroupComparison {
         }
     }
 
-    fn parse_comparisons<'group_id, 'benchmark_group>(
+    fn parse_comparisons<'formatter, 'my_comparisons_report, 'group_id, 'benchmark_group>(
         &mut self,
         group_id: &'group_id str,
-        my_comparisons_report: &'benchmark_group mut Vec<ComparisonReport<'benchmark_group>>,
-        formatter: &ValueFormatter,
+        my_comparisons_report: &'my_comparisons_report mut [ComparisonReport<'benchmark_group>],
+        formatter: &'formatter ValueFormatter,
     ) {
         let mut p_value_formatters: HashMap<format::FloatKey, format::PValueFormatter> =
             HashMap::with_capacity(12);
@@ -387,8 +387,7 @@ impl IntraGroupComparison {
         let mut functions_comparison_report_data: HashMap<String, ComparisonReportRankingData> =
             HashMap::with_capacity(12);
 
-        for comparison in my_comparisons_report.iter_mut() {
-            // for comparison in my_comparisons_report.iter_mut() {
+        for comparison in &mut *my_comparisons_report {
             let comp = &comparison.comp;
             let significance_threshold = comp.significance_threshold;
             let is_mean_different = comp.p_value < significance_threshold;
