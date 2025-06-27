@@ -16,7 +16,6 @@ use tabled::{
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
-// use std::{collections::hash_map::Entry, ops::Range};
 
 pub struct ComparisonReport<'benchmark_group> {
     pub id_new: &'benchmark_group BenchmarkId,
@@ -576,13 +575,10 @@ impl IntraGroupComparison {
 
             rank_temp.sort_by(|a, b| a.latency_mean.partial_cmp(&b.latency_mean).unwrap());
             // let min_latency_mean = rank_temp.first().unwrap().latency_mean;
-            // let mut min_latency_mean: f64 = 1.0;
-            // if idx == 0 {
-            //     min_latency_mean = r.latency_mean;
-            // }
+            let mut min_latency_mean: f64 = 1.0;
             for r in &rank_temp {
-                // for (i, r) in rank_temp.iter().enumerate() {
                 if idx == 0 {
+                    min_latency_mean = r.latency_mean;
                     ranking_table_rows.push(RankingTable {
                         ranking: idx + 1,
                         function_id: r.function_id.clone(),
@@ -620,7 +616,7 @@ impl IntraGroupComparison {
             }
         }
 
-        if let Some(entry) = self.comparison_tables.insert(
+        if let Some(_) = self.comparison_tables.insert(
             group_id.to_owned(),
             GroupComparisonTables {
                 changes_table_rows,

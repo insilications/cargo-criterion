@@ -4,8 +4,8 @@
 			"path": "src/bench_target.rs",
 			"bookmarks": [
 				{
-					"line": 194,
-					"column": 24,
+					"line": 197,
+					"column": 39,
 					"label": ""
 				},
 				{
@@ -19,18 +19,13 @@
 			"path": "src/report.rs",
 			"bookmarks": [
 				{
-					"line": 708,
+					"line": 659,
 					"column": 10,
 					"label": ""
 				},
 				{
-					"line": 1052,
+					"line": 1003,
 					"column": 16,
-					"label": ""
-				},
-				{
-					"line": 1147,
-					"column": 24,
 					"label": ""
 				}
 			]
