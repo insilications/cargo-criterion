@@ -1,18 +1,10 @@
+use crate::estimate::{ConfidenceInterval, Estimates};
 use crate::format;
-use crate::model::{Benchmark, BenchmarkGroup, Model};
+use crate::model::{Benchmark, BenchmarkGroup};
 use crate::report::{
     compare_to_threshold, BenchmarkId, ComparisonData, ComparisonResult, OwnedMeasurementData,
 };
 use crate::value_formatter::ValueFormatter;
-use crate::{
-    estimate::{ConfidenceInterval, Estimates},
-    model::SavedStatistics,
-};
-// use crate::report::{
-//     compare_to_threshold, rank_fastest_with_scores, BenchmarkId, ComparisonReport,
-//     ComparisonReportRanking, ComparisonReportRankingData, ComparisonReportRankingResult,
-//     ComparisonResult, OwnedMeasurementData,
-// };
 use itertools::Itertools;
 use tabled::{
     grid::config::ColoredConfig,
@@ -24,7 +16,7 @@ use tabled::{
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
-use std::{collections::hash_map::Entry, ops::Range};
+// use std::{collections::hash_map::Entry, ops::Range};
 
 pub struct ComparisonReport<'benchmark_group> {
     pub id_new: &'benchmark_group BenchmarkId,
@@ -110,33 +102,37 @@ pub struct RankingResultExtended<'benchmark_group> {
 /// uses only safe Rust and does not perform unnecessary cloning.
 pub fn rank_fastest_with_scores<'benchmark_group>(
     comparisons_report: &'benchmark_group [ComparisonReport<'benchmark_group>],
-) -> RankingResultExtended {
+) -> RankingResult {
     // 0. Map every unique function ID → dense index 0‥m-1
-    let mut id_to_idx: HashMap<&BenchmarkId, usize> =
+    let mut id_to_idx: HashMap<String, usize> =
         HashMap::with_capacity(comparisons_report.len() * 2); // rough upper bound
     let mut next_idx = 0usize;
 
     for r in comparisons_report {
         // new side
-        id_to_idx.entry(r.id_new).or_insert_with(|| {
-            let idx = next_idx;
-            next_idx += 1;
-            idx
-        });
+        id_to_idx
+            .entry(r.id_new.function_id.as_ref().unwrap().clone())
+            .or_insert_with(|| {
+                let idx = next_idx;
+                next_idx += 1;
+                idx
+            });
         // old side
-        id_to_idx.entry(r.id_old).or_insert_with(|| {
-            let idx = next_idx;
-            next_idx += 1;
-            idx
-        });
+        id_to_idx
+            .entry(r.id_old.function_id.as_ref().unwrap().clone())
+            .or_insert_with(|| {
+                let idx = next_idx;
+                next_idx += 1;
+                idx
+            });
     }
 
     // 1. Per-ID score vector
     let mut score = vec![0i32; next_idx];
 
     for r in comparisons_report {
-        let a = id_to_idx[r.id_new];
-        let b = id_to_idx[r.id_old];
+        let a = id_to_idx[r.id_new.function_id.as_ref().unwrap()];
+        let b = id_to_idx[r.id_old.function_id.as_ref().unwrap()];
         match r.ranking_result {
             ComparisonReportRankingResult::Improved => {
                 // +2 score for new, -2 score for old
@@ -162,139 +158,43 @@ pub fn rank_fastest_with_scores<'benchmark_group>(
         }
     }
 
-    // // 2. Build score maps
-    let mut id_to_score: HashMap<&BenchmarkId, i32> = HashMap::with_capacity(id_to_idx.len());
+    // 2. Build score maps
+    let mut id_to_score: HashMap<String, i32> = HashMap::with_capacity(id_to_idx.len());
     for (id, &idx) in &id_to_idx {
-        // id_to_score.insert(id, score[idx]);
-        id_to_score.insert(*id, score[idx]);
+        id_to_score.insert(id.clone(), score[idx]);
     }
 
-    // // 3. Sort by score (descending) and group ties
-    let mut entries: Vec<(&BenchmarkId, i32)> =
-        id_to_score.iter().map(|(id, &s)| (*id, s)).collect();
+    // 3. Sort by score (descending) and group ties
+    let mut entries: Vec<(String, i32)> =
+        id_to_score.iter().map(|(id, &s)| (id.clone(), s)).collect();
 
     entries.sort_unstable_by(|a, b| {
         let ord = b.1.cmp(&a.1); // score DESC
         if ord == std::cmp::Ordering::Equal {
-            a.0.function_id.cmp(&b.0.function_id) // name ASC (stable tie-break)
+            a.0.cmp(&b.0) // name ASC (stable tie-break)
         } else {
             ord
         }
     });
 
-    let mut ranks: Vec<Vec<RankedBenchmark>> = Vec::with_capacity(12);
+    let mut ranks: Vec<Vec<String>> = Vec::with_capacity(12);
     for (id, s) in entries {
         if ranks
             .last()
-            .is_none_or(|g: &Vec<RankedBenchmark>| id_to_score[&g[0].id] != s)
+            .is_none_or(|g: &Vec<String>| id_to_score[&g[0]] != s)
         {
-            ranks.push(vec![RankedBenchmark { id, score: s }]); // new tier
+            ranks.push(vec![id]); // new tier
         } else {
-            ranks
-                .last_mut()
-                .unwrap()
-                .push(RankedBenchmark { id, score: s }); // same tier
+            ranks.last_mut().unwrap().push(id); // same tier
         }
     }
 
     // ──────────────────────────────────────────────────────────────
-    RankingResultExtended { ranks }
+    RankingResult {
+        ranks,
+        scores: id_to_score,
+    }
 }
-// pub fn rank_fastest_with_scores<'benchmark_group>(
-//     comparisons_report: &'benchmark_group [ComparisonReport<'benchmark_group>],
-// ) -> RankingResult {
-//     // 0. Map every unique function ID → dense index 0‥m-1
-//     let mut id_to_idx: HashMap<String, usize> =
-//         HashMap::with_capacity(comparisons_report.len() * 2); // rough upper bound
-//     let mut next_idx = 0usize;
-
-//     for r in comparisons_report {
-//         // new side
-//         id_to_idx
-//             .entry(r.id_new.function_id.as_ref().unwrap().clone())
-//             .or_insert_with(|| {
-//                 let idx = next_idx;
-//                 next_idx += 1;
-//                 idx
-//             });
-//         // old side
-//         id_to_idx
-//             .entry(r.id_old.function_id.as_ref().unwrap().clone())
-//             .or_insert_with(|| {
-//                 let idx = next_idx;
-//                 next_idx += 1;
-//                 idx
-//             });
-//     }
-
-//     // 1. Per-ID score vector
-//     let mut score = vec![0i32; next_idx];
-
-//     for r in comparisons_report {
-//         let a = id_to_idx[r.id_new.function_id.as_ref().unwrap()];
-//         let b = id_to_idx[r.id_old.function_id.as_ref().unwrap()];
-//         match r.ranking_result {
-//             ComparisonReportRankingResult::Improved => {
-//                 // +2 score for new, -2 score for old
-//                 score[a] += 2;
-//                 score[b] -= 2;
-//             }
-//             ComparisonReportRankingResult::Regressed => {
-//                 // +2 score for old, -2 score for new
-//                 score[a] -= 2;
-//                 score[b] += 2;
-//             }
-//             ComparisonReportRankingResult::NonSignificantImproved => {
-//                 // +1 score for new, -1 score for old
-//                 score[a] += 1;
-//                 score[b] -= 1;
-//             }
-//             ComparisonReportRankingResult::NonSignificantRegressed => {
-//                 // +1 score for old, -1 score for new
-//                 score[a] -= 1;
-//                 score[b] += 1;
-//             }
-//             ComparisonReportRankingResult::NoChange => { /* 0 pts */ }
-//         }
-//     }
-
-//     // 2. Build score maps
-//     let mut id_to_score: HashMap<String, i32> = HashMap::with_capacity(id_to_idx.len());
-//     for (id, &idx) in &id_to_idx {
-//         id_to_score.insert(id.clone(), score[idx]);
-//     }
-
-//     // 3. Sort by score (descending) and group ties
-//     let mut entries: Vec<(String, i32)> =
-//         id_to_score.iter().map(|(id, &s)| (id.clone(), s)).collect();
-
-//     entries.sort_unstable_by(|a, b| {
-//         let ord = b.1.cmp(&a.1); // score DESC
-//         if ord == std::cmp::Ordering::Equal {
-//             a.0.cmp(&b.0) // name ASC (stable tie-break)
-//         } else {
-//             ord
-//         }
-//     });
-
-//     let mut ranks: Vec<Vec<String>> = Vec::with_capacity(12);
-//     for (id, s) in entries {
-//         if ranks
-//             .last()
-//             .is_none_or(|g: &Vec<String>| id_to_score[&g[0]] != s)
-//         {
-//             ranks.push(vec![id]); // new tier
-//         } else {
-//             ranks.last_mut().unwrap().push(id); // same tier
-//         }
-//     }
-
-//     // ──────────────────────────────────────────────────────────────
-//     RankingResult {
-//         ranks,
-//         scores: id_to_score,
-//     }
-// }
 
 pub struct GroupsComparisons(HashMap<String, GroupComparisonTables>);
 
@@ -481,7 +381,6 @@ impl IntraGroupComparison {
         my_comparisons_report: &'benchmark_group mut Vec<ComparisonReport<'benchmark_group>>,
         formatter: &ValueFormatter,
     ) {
-        // let mut comparison_report_results: Vec<ComparisonReportRanking> = Vec::with_capacity(12);
         let mut p_value_formatters: HashMap<format::FloatKey, format::PValueFormatter> =
             HashMap::with_capacity(12);
         let mut changes_table_rows: Vec<ChangesTable> = Vec::with_capacity(12);
@@ -490,6 +389,7 @@ impl IntraGroupComparison {
             HashMap::with_capacity(12);
 
         for comparison in my_comparisons_report.iter_mut() {
+            // for comparison in my_comparisons_report.iter_mut() {
             let comp = &comparison.comp;
             let significance_threshold = comp.significance_threshold;
             let is_mean_different = comp.p_value < significance_threshold;
@@ -676,7 +576,7 @@ impl IntraGroupComparison {
 
             rank_temp.sort_by(|a, b| a.latency_mean.partial_cmp(&b.latency_mean).unwrap());
             // let min_latency_mean = rank_temp.first().unwrap().latency_mean;
-            let mut min_latency_mean: f64 = 1.0;
+            // let mut min_latency_mean: f64 = 1.0;
             // if idx == 0 {
             //     min_latency_mean = r.latency_mean;
             // }
