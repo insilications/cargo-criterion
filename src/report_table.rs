@@ -26,53 +26,32 @@ use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::{collections::hash_map::Entry, ops::Range};
 
-#[derive(Debug, Clone)]
-pub struct Details<'my_lifetime> {
-    pub id: &'my_lifetime str,
-    pub addresses: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct User<'my_lifetime> {
-    pub id: &'my_lifetime str,
-    pub details: &'my_lifetime Details<'my_lifetime>,
-}
-
-pub fn create_user<'my_lifetime>(
-    id: &'my_lifetime str,
-    details: &'my_lifetime Details<'my_lifetime>,
-) -> User<'my_lifetime> {
-    User { id, details }
-}
-
-fn main1() {
-    let id: String = "my user".into();
-    let details: Details = Details {
-        id: &id,
-        addresses: vec!["address1".into(), "address2".into()],
-    };
-
-    let user: User<'_> = create_user(&id, &details);
-    println!("user: {user:?}");
-}
-
-fn main2<'my_lifetime>() {
-    let id: String = "my user".into();
-    let details: Details = Details {
-        id: &id,
-        addresses: vec!["address1".into(), "address2".into()],
-    };
-
-    let user: User<'my_lifetime> = create_user(&id, &details);
-    println!("user: {user:?}");
-}
-
 pub struct ComparisonReport<'benchmark_group> {
     pub id_new: &'benchmark_group BenchmarkId,
     pub id_old: &'benchmark_group BenchmarkId,
     pub benchmark_new: &'benchmark_group Benchmark,
     pub benchmark_old: &'benchmark_group Benchmark,
     pub comp: ComparisonData,
+    pub ranking_result: ComparisonReportRankingResult,
+}
+
+impl<'benchmark_group> ComparisonReport<'benchmark_group> {
+    pub fn new(
+        id_new: &'benchmark_group BenchmarkId,
+        id_old: &'benchmark_group BenchmarkId,
+        benchmark_new: &'benchmark_group Benchmark,
+        benchmark_old: &'benchmark_group Benchmark,
+        comp: ComparisonData,
+    ) -> Self {
+        Self {
+            id_new,
+            id_old,
+            benchmark_new,
+            benchmark_old,
+            comp,
+            ranking_result: ComparisonReportRankingResult::NoChange,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -123,15 +102,18 @@ pub struct RankingResult {
 ///
 /// All data structures are pre-allocated where possible; the function
 /// uses only safe Rust and does not perform unnecessary cloning.
-pub fn rank_fastest_with_scores(reports: &[ComparisonReportRanking]) -> RankingResult {
+pub fn rank_fastest_with_scores<'benchmark_group>(
+    comparisons_report: &'benchmark_group [ComparisonReport<'benchmark_group>],
+) -> RankingResult {
     // 0. Map every unique function ID → dense index 0‥m-1
-    let mut id_to_idx: HashMap<String, usize> = HashMap::with_capacity(reports.len() * 2); // rough upper bound
+    let mut id_to_idx: HashMap<String, usize> =
+        HashMap::with_capacity(comparisons_report.len() * 2); // rough upper bound
     let mut next_idx = 0usize;
 
-    for r in reports {
+    for r in comparisons_report {
         // new side
         id_to_idx
-            .entry(r.function_id_new.clone())
+            .entry(r.id_new.function_id.as_ref().unwrap().clone())
             .or_insert_with(|| {
                 let idx = next_idx;
                 next_idx += 1;
@@ -139,7 +121,7 @@ pub fn rank_fastest_with_scores(reports: &[ComparisonReportRanking]) -> RankingR
             });
         // old side
         id_to_idx
-            .entry(r.function_id_old.clone())
+            .entry(r.id_old.function_id.as_ref().unwrap().clone())
             .or_insert_with(|| {
                 let idx = next_idx;
                 next_idx += 1;
@@ -150,10 +132,10 @@ pub fn rank_fastest_with_scores(reports: &[ComparisonReportRanking]) -> RankingR
     // 1. Per-ID score vector
     let mut score = vec![0i32; next_idx];
 
-    for r in reports {
-        let a = id_to_idx[&r.function_id_new];
-        let b = id_to_idx[&r.function_id_old];
-        match r.result {
+    for r in comparisons_report {
+        let a = id_to_idx[r.id_new.function_id.as_ref().unwrap()];
+        let b = id_to_idx[r.id_old.function_id.as_ref().unwrap()];
+        match r.ranking_result {
             ComparisonReportRankingResult::Improved => {
                 // +2 score for new, -2 score for old
                 score[a] += 2;
@@ -334,11 +316,11 @@ impl IntraGroupComparison {
         &mut self,
         group_id: &'group_id str,
         benchmark_group: &'benchmark_group BenchmarkGroup,
-        formatter: &'formatter ValueFormatter<'formatter>,
+        formatter: &'formatter ValueFormatter,
     ) {
         let mut comparisons_report: Vec<ComparisonReport<'benchmark_group>> =
             Vec::with_capacity(12);
-        // for ((id_new, benchmark_new), (id_old, benchmark_old)) in
+
         for combinations in benchmark_group.benchmarks.iter().tuple_combinations::<(
             (&'benchmark_group BenchmarkId, &'benchmark_group Benchmark),
             (&'benchmark_group BenchmarkId, &'benchmark_group Benchmark),
@@ -381,95 +363,39 @@ impl IntraGroupComparison {
                                             )
                                             .unwrap(),
                                     );
-            comparisons_report.push(ComparisonReport::<'benchmark_group> {
+            comparisons_report.push(ComparisonReport::<'benchmark_group>::new(
                 id_new,
                 id_old,
                 benchmark_new,
                 benchmark_old,
                 comp,
-            });
+            ));
+            // comparisons_report.push(ComparisonReport::<'benchmark_group> {
+            //     id_new,
+            //     id_old,
+            //     benchmark_new,
+            //     benchmark_old,
+            //     comp,
+            // });
         }
 
         if !comparisons_report.is_empty() {
-            let kk = Self::parse_comparisons(&comparisons_report, formatter);
-            //             e.insert(Self::parse_comparisons(&comparisons, formatter));
+            if let Some(entry) = self.comparison_tables.insert(
+                group_id.to_owned(),
+                Self::parse_comparisons(&mut comparisons_report, formatter),
+            ) {
+                eprintln!("ALREADY INSERTED: {group_id}");
+            } else {
+                eprintln!("NOT INSERTED: {group_id}");
+            }
         }
-        //         drop(comparisons);
-        //     }
-        // }
     }
-    // pub fn get_intra_group_comparison_data(&mut self, model: &Model, formatter: &ValueFormatter) {
-    //     for (group_id, benchmark_group) in &model.groups {
-    //         let entry = self.comparison_tables.entry(group_id.to_string());
-    //         if let Entry::Vacant(e) = entry {
-    //             eprintln!("\nget_intra_group_comparison_data - group_id: {group_id} ");
-    //             let mut comparisons: Vec<ComparisonReport> = Vec::with_capacity(12);
-    //             for combinations in benchmark_group
-    //                 .benchmarks
-    //                 .iter()
-    //                 .tuple_combinations::<((&BenchmarkId, &Benchmark), (&BenchmarkId, &Benchmark))>(
-    //                 )
-    //             {
-    //                 let ((id_new, benchmark_new), (id_old, benchmark_old)): (
-    //                     (&BenchmarkId, &Benchmark),
-    //                     (&BenchmarkId, &Benchmark),
-    //                 ) = combinations;
-    //                 let comp = crate::analysis::analysis_comparison(
-    //                                     benchmark_new.config.as_ref().unwrap(),
-    //                                     &benchmark_new
-    //                                         .raw_analysis_results
-    //                                         .as_ref()
-    //                                         .map(|r: &OwnedMeasurementData| -> crate::analysis::MeasuredValues<'_> {
-    //                                             crate::analysis::MeasuredValues {
-    //                                                 iteration_count: &r.iter_counts,
-    //                                                 sample_values: &r.sample_times,
-    //                                                 avg_values: &r.avg_times,
-    //                                             }
-    //                                         })
-    //                                         .unwrap(),
-    //                                     &benchmark_old
-    //                                         .raw_analysis_results
-    //                                         .as_ref()
-    //                                         .map(
-    //                                             |r: &OwnedMeasurementData| -> (
-    //                                                 crate::analysis::MeasuredValues<'_>,
-    //                                                 &'_ Estimates,
-    //                                             ) {
-    //                                                 (
-    //                                                     crate::analysis::MeasuredValues {
-    //                                                         iteration_count: &r.iter_counts,
-    //                                                         sample_values: &r.sample_times,
-    //                                                         avg_values: &r.avg_times,
-    //                                                     },
-    //                                                     &r.absolute_estimates,
-    //                                                 )
-    //                                             },
-    //                                         )
-    //                                         .unwrap(),
-    //                                 );
 
-    //                 comparisons.push(ComparisonReport {
-    //                     id_new,
-    //                     id_old,
-    //                     benchmark_new,
-    //                     benchmark_old,
-    //                     comp,
-    //                 });
-    //             }
-
-    //             if !comparisons.is_empty() {
-    //                 e.insert(Self::parse_comparisons(&comparisons, formatter));
-    //             }
-    //             drop(comparisons);
-    //         }
-    //     }
-    // }
-
-    fn parse_comparisons<'formatter, 'benchmark_group>(
-        comparisons_report: &'benchmark_group Vec<ComparisonReport<'benchmark_group>>,
-        formatter: &'formatter ValueFormatter<'formatter>,
+    fn parse_comparisons<'benchmark_group>(
+        my_comparisons_report: &'benchmark_group mut Vec<ComparisonReport<'benchmark_group>>,
+        formatter: &ValueFormatter,
     ) -> GroupComparisonTables {
-        let mut comparison_report_results: Vec<ComparisonReportRanking> = Vec::with_capacity(12);
+        // let mut comparison_report_results: Vec<ComparisonReportRanking> = Vec::with_capacity(12);
         let mut p_value_formatters: HashMap<format::FloatKey, format::PValueFormatter> =
             HashMap::with_capacity(12);
         let mut changes_table_rows: Vec<ChangesTable> = Vec::with_capacity(12);
@@ -477,7 +403,7 @@ impl IntraGroupComparison {
         let mut functions_comparison_report_data: HashMap<String, ComparisonReportRankingData> =
             HashMap::with_capacity(12);
 
-        for comparison in comparisons_report {
+        for comparison in my_comparisons_report.iter_mut() {
             let comp = &comparison.comp;
             let significance_threshold = comp.significance_threshold;
             let is_mean_different = comp.p_value < significance_threshold;
@@ -569,11 +495,12 @@ impl IntraGroupComparison {
                             "Performance has {}",
                             green(bold(format!("improved {mean_diff_pct_str}")))
                         );
-                        comparison_report_results.push(ComparisonReportRanking {
-                            function_id_new: function_id_new_str,
-                            function_id_old: function_id_old_str,
-                            result: ComparisonReportRankingResult::Improved,
-                        });
+                        // comparison_report_results.push(ComparisonReportRanking {
+                        //     function_id_new: function_id_new_str,
+                        //     function_id_old: function_id_old_str,
+                        //     result: ComparisonReportRankingResult::Improved,
+                        // });
+                        comparison.ranking_result = ComparisonReportRankingResult::Improved;
                     }
                     ComparisonResult::Regressed => {
                         mean_diff = red(mean_diff).to_string();
@@ -586,11 +513,12 @@ impl IntraGroupComparison {
                             "Performance has {}",
                             red(bold(format!("regressed {mean_diff_pct_str}")))
                         );
-                        comparison_report_results.push(ComparisonReportRanking {
-                            function_id_new: function_id_new_str,
-                            function_id_old: function_id_old_str,
-                            result: ComparisonReportRankingResult::Regressed,
-                        });
+                        // comparison_report_results.push(ComparisonReportRanking {
+                        //     function_id_new: function_id_new_str,
+                        //     function_id_old: function_id_old_str,
+                        //     result: ComparisonReportRankingResult::Regressed,
+                        // });
+                        comparison.ranking_result = ComparisonReportRankingResult::Regressed;
                     }
                     ComparisonResult::NonSignificant => {
                         mean_diff = faint(bold(mean_diff)).to_string();
@@ -604,11 +532,13 @@ impl IntraGroupComparison {
                                 faint(bold(mean_diff_pct_str)),
                                 noise_threshold * 1e2
                             );
-                            comparison_report_results.push(ComparisonReportRanking {
-                                function_id_new: function_id_new_str,
-                                function_id_old: function_id_old_str,
-                                result: ComparisonReportRankingResult::NonSignificantImproved,
-                            });
+                            // comparison_report_results.push(ComparisonReportRanking {
+                            //     function_id_new: function_id_new_str,
+                            //     function_id_old: function_id_old_str,
+                            //     result: ComparisonReportRankingResult::NonSignificantImproved,
+                            // });
+                            comparison.ranking_result =
+                                ComparisonReportRankingResult::NonSignificantImproved;
                         } else {
                             benchmark_old_mean_str =
                                 faint(bold(benchmark_old_mean_str)).to_string();
@@ -619,21 +549,23 @@ impl IntraGroupComparison {
                                 faint(bold(mean_diff_pct_str)),
                                 noise_threshold * 1e2
                             );
-                            comparison_report_results.push(ComparisonReportRanking {
-                                function_id_new: function_id_new_str,
-                                function_id_old: function_id_old_str,
-                                result: ComparisonReportRankingResult::NonSignificantRegressed,
-                            });
+                            // comparison_report_results.push(ComparisonReportRanking {
+                            //     function_id_new: function_id_new_str,
+                            //     function_id_old: function_id_old_str,
+                            //     result: ComparisonReportRankingResult::NonSignificantRegressed,
+                            // });
+                            comparison.ranking_result =
+                                ComparisonReportRankingResult::NonSignificantImproved;
                         }
                     }
                 }
             } else {
                 explanation_str = "No change in performance detected".to_owned();
-                comparison_report_results.push(ComparisonReportRanking {
-                    function_id_new: function_id_new_str,
-                    function_id_old: function_id_old_str,
-                    result: ComparisonReportRankingResult::NoChange,
-                });
+                // comparison_report_results.push(ComparisonReportRanking {
+                //     function_id_new: function_id_new_str,
+                //     function_id_old: function_id_old_str,
+                //     result: ComparisonReportRankingResult::NoChange,
+                // });
             }
 
             changes_table_rows.push(ChangesTable {
@@ -657,7 +589,7 @@ impl IntraGroupComparison {
             });
         }
 
-        let ranking: RankingResult = rank_fastest_with_scores(&comparison_report_results);
+        let ranking: RankingResult = rank_fastest_with_scores(my_comparisons_report);
         // eprintln!("rank_fastest_with_scores: {ranking:?}");
         let mut ranking_table_rows: Vec<RankingTable> = Vec::with_capacity(12);
         for (idx, functions) in ranking.ranks.iter().enumerate() {

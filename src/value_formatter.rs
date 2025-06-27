@@ -5,7 +5,7 @@ pub struct ValueFormatter<'a> {
     connection: RefCell<&'a mut Connection>,
 }
 impl ValueFormatter<'_> {
-    pub fn new(conn: &mut Connection) -> ValueFormatter {
+    pub fn new(conn: &'_ mut Connection) -> ValueFormatter<'_> {
         ValueFormatter {
             connection: RefCell::new(conn),
         }

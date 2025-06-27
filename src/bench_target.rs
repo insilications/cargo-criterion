@@ -273,7 +273,9 @@ impl BenchTarget {
                 }
                 Ok(Some(exit_status)) => {
                     if exit_status.success() {
-                        intra_group_comparison_changes.print_tables();
+                        if intra_group_comparison {
+                            intra_group_comparison_changes.print_tables();
+                        }
                         return Ok(());
                     } else {
                         return Err(anyhow!(
